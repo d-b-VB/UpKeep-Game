@@ -1,5 +1,7 @@
 const board = document.getElementById('hex-board');
+
 const hammer = document.getElementById('hammer');
+
 const statusText = document.getElementById('status');
 
 const HEX_RADIUS = 52;
