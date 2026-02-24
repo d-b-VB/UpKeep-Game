@@ -13,7 +13,7 @@ body {
 }
 
 .game-shell {
-  width: min(92vw, 680px);
+  width: min(92vw, 640px);
   text-align: center;
 }
 
@@ -50,34 +50,33 @@ h1 {
 }
 
 .hex {
+  fill: #32416f;
   stroke: #bac8ff;
   stroke-width: 2;
-  transition: filter 140ms ease, transform 140ms ease;
+  transition: fill 180ms ease;
+  cursor: default;
+}
+
+.hex.adjacent {
+  fill: #4d66ae;
   cursor: pointer;
 }
 
-.hex.target {
-  stroke: #ffffff;
-  stroke-width: 4;
+.hex.adjacent:hover,
+.hex.adjacent:focus-visible {
+  fill: #6784df;
+  outline: none;
 }
 
-.hex.selected {
-  filter: brightness(1.15);
-}
-
-.symbol {
-  font-size: 15px;
+#hammer {
+  position: absolute;
+  width: 48px;
+  height: 48px;
+  display: grid;
+  place-items: center;
+  font-size: 38px;
+  transform: translate(-50%, -55%);
+  transition: left 250ms ease, top 250ms ease;
   pointer-events: none;
-}
-
-.unit-ring {
-  stroke: #111;
-  stroke-width: 2;
-}
-
-.unit-icon {
-  font-size: 22px;
-  text-anchor: middle;
-  dominant-baseline: middle;
-  pointer-events: none;
+  filter: drop-shadow(0 2px 2px rgba(0, 0, 0, 0.4));
 }
