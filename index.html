@@ -1,0 +1,21 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>UpKeep Demo - Hex Hammer</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <main class="game-shell">
+      <h1>Hex Hammer Demo</h1>
+      <p class="instructions">Click or tap a highlighted neighboring hex to move the hammer.</p>
+      <p id="status" class="status" aria-live="polite"></p>
+      <div class="board-wrap">
+        <svg id="hex-board" viewBox="0 0 520 420" aria-label="Hex map"></svg>
+        <div id="hammer" aria-hidden="true">🔨</div>
+      </div>
+    </main>
+    <script src="game.js"></script>
+  </body>
+</html>
