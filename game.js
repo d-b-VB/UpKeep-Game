@@ -1,14 +1,11 @@
 const board = document.getElementById('hex-board');
 const statusText = document.getElementById('status');
 
-const HEX_RADIUS = 52;
-const ORIGIN = { x: 260, y: 205 };
-const DIRECTIONS = [
-  [1, 0], [1, -1], [0, -1],
-  [-1, 0], [-1, 1], [0, 1],
-];
+const HEX_RADIUS = 48;
+const ORIGIN = { x: 380, y: 310 };
+const DIRECTIONS = [[1, 0], [1, -1], [0, -1], [-1, 0], [-1, 1], [0, 1]];
 
-const tilePool = [
+const weightedTypes = [
   ...Array(64).fill('forest'),
   ...Array(32).fill('pasture'),
   ...Array(16).fill('farm'),
@@ -40,42 +37,49 @@ const symbolSets = {
   city: ['🏠', '🏡', '🏥', '🏫', '⛪', '🏤'],
 };
 
-const cells = [
-  { q: 0, r: 0 },
-  { q: 1, r: 0 },
-  { q: 1, r: -1 },
-  { q: 0, r: -1 },
-  { q: -1, r: 0 },
-  { q: -1, r: 1 },
-  { q: 0, r: 1 },
-];
+function keyOf(cell) {
+  return `${cell.q},${cell.r}`;
+}
 
-const tiles = cells.map((cell) => ({
-  ...cell,
-  type: tilePool[Math.floor(Math.random() * tilePool.length)],
-  owner: null,
-  symbols: Array.from({ length: 6 }, () => {
-    const set = symbolSets[tilePool[Math.floor(Math.random() * tilePool.length)]];
-    return set[Math.floor(Math.random() * set.length)];
-  }),
-}));
+function randomType() {
+  return weightedTypes[Math.floor(Math.random() * weightedTypes.length)];
+}
 
-tiles[0].type = 'homestead';
-tiles[1].type = 'farm';
-tiles[2].type = 'forest';
+function buildRadiusCells(radius) {
+  const result = [];
+  for (let q = -radius; q <= radius; q += 1) {
+    const r1 = Math.max(-radius, -q - radius);
+    const r2 = Math.min(radius, -q + radius);
+    for (let r = r1; r <= r2; r += 1) {
+      result.push({ q, r });
+    }
+  }
+  return result;
+}
+
+const cells = buildRadiusCells(2); // 19 hexes
+const cellKeys = new Set(cells.map(keyOf));
+
+const tiles = cells.map((cell) => {
+  const type = randomType();
+  const set = symbolSets[type];
+  return {
+    ...cell,
+    type,
+    owner: null,
+    symbols: Array.from({ length: 6 }, () => set[Math.floor(Math.random() * set.length)]),
+  };
+});
 
 const units = new Map([
   ['0,0', { player: 'blue', type: 'worker', emoji: '🔨' }],
   ['1,0', { player: 'red', type: 'spear', emoji: '↗️' }],
 ]);
+
 tiles.find((t) => keyOf(t) === '0,0').owner = 'blue';
 tiles.find((t) => keyOf(t) === '1,0').owner = 'red';
 
 let selectedKey = null;
-
-function keyOf(cell) {
-  return `${cell.q},${cell.r}`;
-}
 
 function axialToPixel({ q, r }) {
   return {
@@ -91,19 +95,21 @@ function polygonPoints(center, radius) {
   }).join(' ');
 }
 
+function getCellByKey(key) {
+  const [q, r] = key.split(',').map(Number);
+  return { q, r };
+}
+
 function isAdjacent(a, b) {
   return DIRECTIONS.some(([dq, dr]) => a.q + dq === b.q && a.r + dr === b.r);
 }
 
-function getCellByKey(key) {
-  const [q, r] = key.split(',').map(Number);
-  return cells.find((c) => c.q === q && c.r === r);
-}
-
 function canMove(fromKey, toKey) {
+  if (!cellKeys.has(fromKey) || !cellKeys.has(toKey) || fromKey === toKey) return false;
+
   const from = getCellByKey(fromKey);
   const to = getCellByKey(toKey);
-  if (!from || !to || !isAdjacent(from, to)) return false;
+  if (!isAdjacent(from, to)) return false;
 
   const unit = units.get(fromKey);
   const destinationUnit = units.get(toKey);
@@ -111,25 +117,26 @@ function canMove(fromKey, toKey) {
 
   if (!unit || !destTile) return false;
   if (unit.type === 'worker') return !destinationUnit;
+
   if (unit.type === 'spear') {
     if (!destinationUnit) return true;
     return destinationUnit.player !== unit.player && !closedTiles.has(destTile.type);
   }
+
   return false;
 }
 
-function moveUnit(fromKey, toKey) {
-  const unit = units.get(fromKey);
-  if (!unit || !canMove(fromKey, toKey)) return;
-  units.set(toKey, unit);
-  units.delete(fromKey);
-  tiles.find((t) => keyOf(t) === toKey).owner = unit.player;
+function getTargets(fromKey) {
+  return cells.map(keyOf).filter((toKey) => canMove(fromKey, toKey));
 }
 
-function getTargets(fromKey) {
-  return cells
-    .map((c) => keyOf(c))
-    .filter((toKey) => canMove(fromKey, toKey));
+function moveUnit(fromKey, toKey) {
+  if (!canMove(fromKey, toKey)) return;
+  const unit = units.get(fromKey);
+  units.set(toKey, unit);
+  units.delete(fromKey);
+  const destTile = tiles.find((t) => keyOf(t) === toKey);
+  destTile.owner = unit.player;
 }
 
 function renderStatus() {
@@ -139,12 +146,12 @@ function renderStatus() {
   }
 
   const unit = units.get(selectedKey);
-  const targets = getTargets(selectedKey).length;
-  statusText.textContent = `${unit.player.toUpperCase()} ${unit.type} selected. ${targets} legal adjacent moves.`;
+  statusText.textContent = `${unit.player.toUpperCase()} ${unit.type} selected. ${getTargets(selectedKey).length} legal adjacent moves.`;
 }
 
 function render() {
   board.innerHTML = '';
+  const targets = selectedKey ? new Set(getTargets(selectedKey)) : new Set();
 
   for (const tile of tiles) {
     const key = keyOf(tile);
@@ -152,22 +159,17 @@ function render() {
 
     const hex = document.createElementNS('http://www.w3.org/2000/svg', 'polygon');
     hex.setAttribute('class', 'hex');
-    hex.setAttribute('points', polygonPoints(pos, HEX_RADIUS - 4));
+    hex.setAttribute('points', polygonPoints(pos, HEX_RADIUS - 3));
     hex.setAttribute('fill', tileColors[tile.type] || '#ffffff');
     hex.dataset.key = key;
     if (selectedKey === key) hex.classList.add('selected');
-
-    if (selectedKey && getTargets(selectedKey).includes(key)) {
-      hex.classList.add('target');
-    }
-
+    if (targets.has(key)) hex.classList.add('target');
     board.appendChild(hex);
 
     tile.symbols.forEach((symbol, i) => {
       const angle = (Math.PI / 180) * (60 * i - 30);
-      const sx = pos.x + (HEX_RADIUS * 0.48) * Math.cos(angle);
-      const sy = pos.y + (HEX_RADIUS * 0.48) * Math.sin(angle);
-
+      const sx = pos.x + (HEX_RADIUS * 0.5) * Math.cos(angle);
+      const sy = pos.y + (HEX_RADIUS * 0.5) * Math.sin(angle);
       const text = document.createElementNS('http://www.w3.org/2000/svg', 'text');
       text.setAttribute('x', String(sx));
       text.setAttribute('y', String(sy + 5));
@@ -179,13 +181,13 @@ function render() {
 
     const unit = units.get(key);
     if (unit) {
-      const unitGroup = document.createElementNS('http://www.w3.org/2000/svg', 'g');
-      unitGroup.dataset.key = key;
+      const group = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+      group.dataset.key = key;
 
       const ring = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
       ring.setAttribute('cx', String(pos.x));
       ring.setAttribute('cy', String(pos.y));
-      ring.setAttribute('r', '19');
+      ring.setAttribute('r', '18');
       ring.setAttribute('class', 'unit-ring');
       ring.setAttribute('fill', unit.player === 'blue' ? '#2563eb' : '#dc2626');
 
@@ -195,9 +197,9 @@ function render() {
       icon.setAttribute('class', 'unit-icon');
       icon.textContent = unit.emoji;
 
-      unitGroup.appendChild(ring);
-      unitGroup.appendChild(icon);
-      board.appendChild(unitGroup);
+      group.appendChild(ring);
+      group.appendChild(icon);
+      board.appendChild(group);
     }
   }
 
@@ -205,10 +207,10 @@ function render() {
 }
 
 board.addEventListener('click', (event) => {
-  const target = event.target.closest('[data-key]');
-  if (!target) return;
+  const clicked = event.target.closest('[data-key]');
+  if (!clicked) return;
 
-  const key = target.dataset.key;
+  const key = clicked.dataset.key;
   const clickedUnit = units.get(key);
 
   if (selectedKey && canMove(selectedKey, key)) {
@@ -218,12 +220,7 @@ board.addEventListener('click', (event) => {
     return;
   }
 
-  if (clickedUnit) {
-    selectedKey = key;
-  } else {
-    selectedKey = null;
-  }
-
+  selectedKey = clickedUnit ? key : null;
   render();
 });
 
