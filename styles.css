@@ -1,0 +1,82 @@
+:root {
+  color-scheme: dark;
+  font-family: Inter, system-ui, Avenir, Helvetica, Arial, sans-serif;
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  display: grid;
+  place-items: center;
+  background: radial-gradient(circle at top, #22315f 0%, #101424 60%, #090b14 100%);
+  color: #f6f8ff;
+}
+
+.game-shell {
+  width: min(92vw, 640px);
+  text-align: center;
+}
+
+h1 {
+  margin-bottom: 0.25rem;
+}
+
+.instructions {
+  margin: 0;
+  color: #c8d2ff;
+}
+
+.status {
+  margin: 0.5rem 0 0;
+  color: #e3e9ff;
+  font-size: 0.95rem;
+  min-height: 1.4rem;
+}
+
+.board-wrap {
+  position: relative;
+  margin-top: 0.75rem;
+  background: rgba(8, 12, 24, 0.65);
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  border-radius: 16px;
+  padding: 12px;
+}
+
+#hex-board {
+  width: 100%;
+  height: auto;
+  display: block;
+  touch-action: manipulation;
+}
+
+.hex {
+  fill: #32416f;
+  stroke: #bac8ff;
+  stroke-width: 2;
+  transition: fill 180ms ease;
+  cursor: default;
+}
+
+.hex.adjacent {
+  fill: #4d66ae;
+  cursor: pointer;
+}
+
+.hex.adjacent:hover,
+.hex.adjacent:focus-visible {
+  fill: #6784df;
+  outline: none;
+}
+
+#hammer {
+  position: absolute;
+  width: 48px;
+  height: 48px;
+  display: grid;
+  place-items: center;
+  font-size: 38px;
+  transform: translate(-50%, -55%);
+  transition: left 250ms ease, top 250ms ease;
+  pointer-events: none;
+  filter: drop-shadow(0 2px 2px rgba(0, 0, 0, 0.4));
+}
