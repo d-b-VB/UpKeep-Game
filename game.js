@@ -4,10 +4,12 @@ const resourcesEl = document.getElementById('resources');
 const selectionEl = document.getElementById('selection');
 const endTurnBtn = document.getElementById('end-turn');
 
-const HEX_RADIUS = 48;
-const MINI_RADIUS = 8.2;
-const ORIGIN = { x: 370, y: 300 };
+const HEX_RADIUS = 44;
+const MINI_RADIUS = 7.6;
+const ORIGIN = { x: 620, y: 520 };
 const DIRECTIONS = [[1, 0], [1, -1], [0, -1], [-1, 0], [-1, 1], [0, 1]];
+
+const MAP_RADIUS = 4; // 2 more rings beyond previous radius 2 => 61 tiles
 
 const weightedTypes = [
   ...Array(64).fill('forest'),
@@ -37,6 +39,22 @@ const resourceByType = {
   village: 'supplies',
   town: 'crafts',
   city: 'luxury',
+};
+
+const structureUpkeep = {
+  village: { wood: 1 },
+  town: { wood: 1, crops: 1, supplies: 1 },
+  city: { wood: 1, crops: 1, livestock: 1, supplies: 1, crafts: 1 },
+};
+
+const unitUpkeep = {
+  woodsman: { provisions: 1 },
+  spearman: { crops: 1 },
+};
+
+const freeUnitCondition = {
+  woodsman: (tile) => tile.type === 'forest',
+  spearman: (tile) => tile.type === 'farm',
 };
 
 const upgradePaths = {
@@ -69,6 +87,8 @@ const symbolSets = {
   city: ['🏙️', '🥐', '🍷', '🏥', '🏫', '⛪'],
 };
 
+const resourceKeys = ['crops', 'wood', 'livestock', 'provisions', 'supplies', 'crafts', 'luxury'];
+
 function keyOf(cell) { return `${cell.q},${cell.r}`; }
 function randomType() { return weightedTypes[Math.floor(Math.random() * weightedTypes.length)]; }
 function ownerColor(player) { return player === 'blue' ? '#3b82f6' : player === 'red' ? '#ef4444' : null; }
@@ -83,7 +103,7 @@ function buildRadiusCells(radius) {
   return result;
 }
 
-const cells = buildRadiusCells(2);
+const cells = buildRadiusCells(MAP_RADIUS);
 const cellKeys = new Set(cells.map(keyOf));
 
 const tiles = cells.map((cell) => {
@@ -97,13 +117,19 @@ const tiles = cells.map((cell) => {
   };
 });
 
-const units = new Map([
-  ['0,0', { player: 'blue', type: 'worker' }],
-  ['1,0', { player: 'red', type: 'spearman' }],
-]);
+const units = new Map();
 
-tiles.find((t) => keyOf(t) === '0,0').owner = 'blue';
-tiles.find((t) => keyOf(t) === '1,0').owner = 'red';
+function placeStart(q, r, player) {
+  const tile = tiles.find((t) => t.q === q && t.r === r);
+  if (!tile) return;
+  tile.type = 'homestead';
+  tile.owner = player;
+  tile.symbols = Array.from({ length: 6 }, () => pickSymbol('homestead'));
+  units.set(`${q},${r}`, { player, type: 'woodsman' });
+}
+
+placeStart(-MAP_RADIUS, MAP_RADIUS, 'blue');
+placeStart(MAP_RADIUS, -MAP_RADIUS, 'red');
 
 const resources = {
   blue: { crops: 2, wood: 0, livestock: 0, provisions: 0, supplies: 0, crafts: 0, luxury: 0 },
@@ -112,6 +138,11 @@ const resources = {
 
 let currentPlayer = 'blue';
 let selectedKey = null;
+
+function pickSymbol(type) {
+  const set = symbolSets[type];
+  return set[Math.floor(Math.random() * set.length)];
+}
 
 function axialToPixel({ q, r }) {
   return {
@@ -139,12 +170,12 @@ function getCellByKey(key) {
   return { q, r };
 }
 
-function isAdjacent(a, b) {
-  return DIRECTIONS.some(([dq, dr]) => a.q + dq === b.q && a.r + dr === b.r);
-}
-
 function getTile(key) {
   return tiles.find((t) => keyOf(t) === key);
+}
+
+function isAdjacent(a, b) {
+  return DIRECTIONS.some(([dq, dr]) => a.q + dq === b.q && a.r + dr === b.r);
 }
 
 function canAfford(player, cost) {
@@ -163,6 +194,99 @@ function harvest(player) {
   }
 }
 
+function cubeDistance(a, b) {
+  const aq = a.q; const ar = a.r; const as = -aq - ar;
+  const bq = b.q; const br = b.r; const bs = -bq - br;
+  return Math.max(Math.abs(aq - bq), Math.abs(ar - br), Math.abs(as - bs));
+}
+
+function nearestProducerDistance(player, resource, fromTile) {
+  const producers = tiles.filter((t) => t.owner === player && resourceByType[t.type] === resource);
+  if (producers.length === 0) return 999;
+  return Math.min(...producers.map((p) => cubeDistance(fromTile, p)));
+}
+
+function calculateProduction(player) {
+  const out = Object.fromEntries(resourceKeys.map((k) => [k, 0]));
+  for (const tile of tiles) {
+    if (tile.owner !== player) continue;
+    const resource = resourceByType[tile.type];
+    if (resource) out[resource] += 1;
+  }
+  return out;
+}
+
+function calculateNeeds(player) {
+  const out = Object.fromEntries(resourceKeys.map((k) => [k, 0]));
+
+  for (const tile of tiles) {
+    if (tile.owner !== player) continue;
+
+    const sNeed = structureUpkeep[tile.type] || {};
+    for (const [resource, amount] of Object.entries(sNeed)) out[resource] += amount;
+
+    const unit = units.get(keyOf(tile));
+    if (!unit || unit.player !== player) continue;
+    if (freeUnitCondition[unit.type]?.(tile)) continue;
+
+    const uNeed = unitUpkeep[unit.type] || {};
+    for (const [resource, amount] of Object.entries(uNeed)) out[resource] += amount;
+  }
+
+  return out;
+}
+
+function enforceShortages(player) {
+  const logs = [];
+
+  for (const resource of resourceKeys) {
+    const production = calculateProduction(player)[resource];
+    const need = calculateNeeds(player)[resource];
+    let deficit = need - production;
+    if (deficit <= 0) continue;
+
+    const unitConsumers = [];
+    for (const [key, unit] of units.entries()) {
+      if (unit.player !== player) continue;
+      const tile = getTile(key);
+      if (!tile) continue;
+      if (freeUnitCondition[unit.type]?.(tile)) continue;
+      const amount = (unitUpkeep[unit.type] || {})[resource] || 0;
+      if (!amount) continue;
+      unitConsumers.push({ key, amount, dist: nearestProducerDistance(player, resource, tile), unitType: unit.type });
+    }
+    unitConsumers.sort((a, b) => b.dist - a.dist);
+
+    for (const u of unitConsumers) {
+      if (deficit <= 0) break;
+      units.delete(u.key);
+      logs.push(`${player} disbanded ${u.unitType} at ${u.key} (short ${resource})`);
+      deficit -= u.amount;
+    }
+
+    if (deficit <= 0) continue;
+
+    const structureConsumers = [];
+    for (const tile of tiles) {
+      if (tile.owner !== player) continue;
+      const amount = (structureUpkeep[tile.type] || {})[resource] || 0;
+      if (!amount) continue;
+      structureConsumers.push({ tile, amount, dist: nearestProducerDistance(player, resource, tile) });
+    }
+    structureConsumers.sort((a, b) => b.dist - a.dist);
+
+    for (const s of structureConsumers) {
+      if (deficit <= 0) break;
+      s.tile.owner = null;
+      units.delete(keyOf(s.tile));
+      logs.push(`${player} lost ${s.tile.type} at ${keyOf(s.tile)} (short ${resource})`);
+      deficit -= s.amount;
+    }
+  }
+
+  return logs;
+}
+
 function canMove(fromKey, toKey) {
   if (!cellKeys.has(fromKey) || !cellKeys.has(toKey) || fromKey === toKey) return false;
   const from = getCellByKey(fromKey);
@@ -171,10 +295,9 @@ function canMove(fromKey, toKey) {
 
   const unit = units.get(fromKey);
   const destinationUnit = units.get(toKey);
-  if (!unit) return false;
+  if (!unit || unit.player !== currentPlayer) return false;
 
-  if (unit.player !== currentPlayer) return false;
-  if (unit.type === 'worker') return !destinationUnit;
+  if (unit.type === 'woodsman') return !destinationUnit;
   if (unit.type === 'spearman') return !destinationUnit || destinationUnit.player !== unit.player;
   return false;
 }
@@ -189,7 +312,7 @@ function moveUnit(fromKey, toKey) {
   const destTile = getTile(toKey);
   if (!unit || !destTile) return;
 
-  if (!destTile.owner && unit.type === 'worker') {
+  if (!destTile.owner && unit.type === 'woodsman') {
     if (!canAfford(unit.player, claimCost)) {
       statusText.textContent = `${unit.player.toUpperCase()} lacks crops to claim this tile.`;
       return;
@@ -211,14 +334,14 @@ function upgradeSelectedTile(toType) {
   const tile = getTile(selectedKey);
   const unit = units.get(selectedKey);
   if (!tile || !unit) return;
-  if (unit.type !== 'worker' || unit.player !== currentPlayer || tile.owner !== currentPlayer) return;
+  if (unit.type !== 'woodsman' || unit.player !== currentPlayer || tile.owner !== currentPlayer) return;
+
   const cost = upgradeCost[toType];
   if (!cost || !canAfford(currentPlayer, cost)) return;
 
   spend(currentPlayer, cost);
   tile.type = toType;
-  const set = symbolSets[toType];
-  tile.symbols = Array.from({ length: 6 }, () => set[Math.floor(Math.random() * set.length)]);
+  tile.symbols = Array.from({ length: 6 }, () => pickSymbol(toType));
   render();
 }
 
@@ -235,7 +358,7 @@ function renderResources() {
       <span>🏘️ crafts</span><span>${p.crafts}</span>
       <span>💎 luxury</span><span>${p.luxury}</span>
     </div>
-    <div style="margin-top:6px;font-size:12px;opacity:.85;">Claiming neutral tile with worker costs: 🌽 1.</div>
+    <div style="margin-top:6px;font-size:12px;opacity:.85;">Worker claiming cost: 🌽 1.</div>
   `;
 }
 
@@ -250,15 +373,15 @@ function renderSelectionPanel() {
   if (!tile) return;
 
   let html = `<strong>Selected</strong><div>${tile.type} @ [${tile.q},${tile.r}]</div><div>owner: ${tile.owner || 'neutral'}</div>`;
-
   if (unit) html += `<div>unit: ${unit.type} (${unit.player})</div>`;
 
-  if (unit && unit.type === 'worker' && unit.player === currentPlayer && tile.owner === currentPlayer) {
+  if (unit && unit.type === 'woodsman' && unit.player === currentPlayer && tile.owner === currentPlayer) {
     const next = upgradePaths[tile.type] || [];
-    next.forEach((toType, idx) => {
+    next.forEach((toType) => {
       const cost = upgradeCost[toType] || {};
       const afford = canAfford(currentPlayer, cost);
-      html += `<button data-upgrade="${toType}" ${afford ? '' : 'disabled'}>Upgrade → ${toType} (cost: ${Object.entries(cost).map(([k, v]) => `${k} ${v}`).join(', ')})</button>`;
+      const costLabel = Object.entries(cost).map(([k, v]) => `${k} ${v}`).join(', ');
+      html += `<button data-upgrade="${toType}" ${afford ? '' : 'disabled'}>Upgrade → ${toType} (${costLabel})</button>`;
     });
   }
 
@@ -268,9 +391,14 @@ function renderSelectionPanel() {
   });
 }
 
-function renderStatus() {
+function renderStatus(logs = []) {
+  if (logs.length) {
+    statusText.textContent = logs.join(' | ');
+    return;
+  }
+
   if (!selectedKey) {
-    statusText.textContent = `${currentPlayer.toUpperCase()} turn. Select your unit (🔨 worker or spearman glyph).`;
+    statusText.textContent = `${currentPlayer.toUpperCase()} turn. Select your woodsman (🔨) or spearman.`;
     return;
   }
 
@@ -288,14 +416,14 @@ function renderSpearmanGlyph(pos) {
   const shaft = document.createElementNS('http://www.w3.org/2000/svg', 'line');
   shaft.setAttribute('x1', String(pos.x - 8));
   shaft.setAttribute('y1', String(pos.y + 8));
-  shaft.setAttribute('x2', String(pos.x + 9));
-  shaft.setAttribute('y2', String(pos.y - 9));
+  shaft.setAttribute('x2', String(pos.x + 10));
+  shaft.setAttribute('y2', String(pos.y - 10));
   shaft.setAttribute('stroke', '#fff');
   shaft.setAttribute('stroke-width', '3');
   shaft.setAttribute('stroke-linecap', 'round');
 
   const tip = document.createElementNS('http://www.w3.org/2000/svg', 'polygon');
-  tip.setAttribute('points', `${pos.x + 11},${pos.y - 11} ${pos.x + 4},${pos.y - 10} ${pos.x + 10},${pos.y - 4}`);
+  tip.setAttribute('points', `${pos.x + 12},${pos.y - 12} ${pos.x + 5},${pos.y - 11} ${pos.x + 11},${pos.y - 5}`);
   tip.setAttribute('fill', '#fff');
 
   group.appendChild(shaft);
@@ -303,7 +431,7 @@ function renderSpearmanGlyph(pos) {
   return group;
 }
 
-function render() {
+function render(logs = []) {
   board.innerHTML = '';
   const targets = selectedKey ? new Set(getTargets(selectedKey)) : new Set();
 
@@ -313,30 +441,20 @@ function render() {
 
     const hex = document.createElementNS('http://www.w3.org/2000/svg', 'polygon');
     hex.setAttribute('class', 'hex');
-    hex.setAttribute('points', polygonPoints(pos, HEX_RADIUS - 1));
-    hex.setAttribute('fill', tilePalettes[tile.type][0]);
+    hex.setAttribute('points', polygonPoints(pos, HEX_RADIUS));
+    hex.setAttribute('fill', 'transparent');
     hex.setAttribute('stroke', 'none');
     hex.dataset.key = key;
     board.appendChild(hex);
 
-    const clipId = `clip-${key.replace(',', '-')}`;
-    const defs = document.createElementNS('http://www.w3.org/2000/svg', 'defs');
-    const clipPath = document.createElementNS('http://www.w3.org/2000/svg', 'clipPath');
-    clipPath.setAttribute('id', clipId);
-    const clipPoly = document.createElementNS('http://www.w3.org/2000/svg', 'polygon');
-    clipPoly.setAttribute('points', polygonPoints(pos, HEX_RADIUS - 1));
-    clipPath.appendChild(clipPoly);
-    defs.appendChild(clipPath);
-    board.appendChild(defs);
-
-    const mosaicGroup = document.createElementNS('http://www.w3.org/2000/svg', 'g');
-    mosaicGroup.setAttribute('clip-path', `url(#${clipId})`);
-
     const ownerTint = ownerColor(tile.owner);
-    for (let rq = -2; rq <= 2; rq += 1) {
-      for (let rr = -2; rr <= 2; rr += 1) {
+    const mosaicGroup = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+    mosaicGroup.setAttribute('pointer-events', 'none');
+
+    for (let rq = -3; rq <= 3; rq += 1) {
+      for (let rr = -3; rr <= 3; rr += 1) {
         const rs = -rq - rr;
-        if (Math.max(Math.abs(rq), Math.abs(rr), Math.abs(rs)) > 2) continue;
+        if (Math.max(Math.abs(rq), Math.abs(rr), Math.abs(rs)) > 3) continue;
         const mini = flatMiniCenter(rq, rr, MINI_RADIUS);
         const miniPoly = document.createElementNS('http://www.w3.org/2000/svg', 'polygon');
         miniPoly.setAttribute('points', polygonPoints({ x: pos.x + mini.x, y: pos.y + mini.y }, MINI_RADIUS, 0));
@@ -352,7 +470,7 @@ function render() {
     if (selectedKey === key || targets.has(key)) {
       const outline = document.createElementNS('http://www.w3.org/2000/svg', 'polygon');
       outline.setAttribute('class', `hex ${selectedKey === key ? 'selected' : 'target'}`);
-      outline.setAttribute('points', polygonPoints(pos, HEX_RADIUS - 1));
+      outline.setAttribute('points', polygonPoints(pos, HEX_RADIUS));
       outline.setAttribute('fill', 'none');
       outline.dataset.key = key;
       board.appendChild(outline);
@@ -360,8 +478,8 @@ function render() {
 
     tile.symbols.forEach((symbol, i) => {
       const angle = (Math.PI / 180) * (60 * i - 30);
-      const sx = pos.x + (HEX_RADIUS * 0.52) * Math.cos(angle);
-      const sy = pos.y + (HEX_RADIUS * 0.52) * Math.sin(angle);
+      const sx = pos.x + (HEX_RADIUS * 0.5) * Math.cos(angle);
+      const sy = pos.y + (HEX_RADIUS * 0.5) * Math.sin(angle);
       const text = document.createElementNS('http://www.w3.org/2000/svg', 'text');
       text.setAttribute('x', String(sx));
       text.setAttribute('y', String(sy + 5));
@@ -374,31 +492,32 @@ function render() {
     const unit = units.get(key);
     if (unit) {
       const group = document.createElementNS('http://www.w3.org/2000/svg', 'g');
-      group.dataset.key = key;
+      group.setAttribute('pointer-events', 'none');
 
       const ring = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
       ring.setAttribute('cx', String(pos.x));
       ring.setAttribute('cy', String(pos.y));
-      ring.setAttribute('r', '18');
+      ring.setAttribute('r', '17');
       ring.setAttribute('class', 'unit-ring');
       ring.setAttribute('fill', unit.player === 'blue' ? '#2563eb' : '#dc2626');
       group.appendChild(ring);
 
-      if (unit.type === 'worker') {
+      if (unit.type === 'woodsman') {
         const icon = document.createElementNS('http://www.w3.org/2000/svg', 'text');
         icon.setAttribute('x', String(pos.x));
         icon.setAttribute('y', String(pos.y + 1));
         icon.setAttribute('class', 'unit-icon');
-        icon.textContent = '🔨';
+        icon.textContent = '🪓';
         group.appendChild(icon);
       } else {
         group.appendChild(renderSpearmanGlyph(pos));
       }
+
       board.appendChild(group);
     }
   }
 
-  renderStatus();
+  renderStatus(logs);
   renderResources();
   renderSelectionPanel();
 }
@@ -417,15 +536,16 @@ board.addEventListener('click', (event) => {
     return;
   }
 
-  selectedKey = clickedUnit || getTile(key) ? key : null;
+  selectedKey = (clickedUnit || getTile(key)) ? key : null;
   render();
 });
 
 endTurnBtn.addEventListener('click', () => {
   harvest(currentPlayer);
+  const logs = [...enforceShortages('blue'), ...enforceShortages('red')];
   currentPlayer = currentPlayer === 'blue' ? 'red' : 'blue';
   selectedKey = null;
-  render();
+  render(logs);
 });
 
 render();
