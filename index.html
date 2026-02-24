@@ -1,0 +1,20 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>UpKeep Demo - Hex Hammer</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <main class="game-shell">
+      <h1>UpKeep Browser Prototype</h1>
+      <p class="instructions">Click a unit to select it. Click a highlighted adjacent hex to move.</p>
+      <p id="status" class="status" aria-live="polite"></p>
+      <div class="board-wrap">
+        <svg id="hex-board" viewBox="0 0 520 420" aria-label="Hex map"></svg>
+      </div>
+    </main>
+    <script src="game.js"></script>
+  </body>
+</html>
