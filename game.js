@@ -8,7 +8,7 @@ const HEX_RADIUS = 42;
 const MINI_RADIUS = 8;
 const ORIGIN = { x: 980, y: 860 };
 const DIRECTIONS = [[1, 0], [1, -1], [0, -1], [-1, 0], [-1, 1], [0, 1]];
-const MAP_RADIUS = 6; // +2 rings -> 127 tiles
+const MAP_RADIUS = 6; // 127 tiles
 
 const weightedTypes = [
   ...Array(64).fill('forest'),
@@ -40,7 +40,8 @@ const tilePalettes = {
 
 const productionByType = {
   forest: 'wood', pasture: 'livestock', farm: 'crops', homestead: 'provisions',
-  village: 'supplies', town: 'crafts', city: 'luxury', manor: 'support', estate: 'authority', palace: 'sovereignty',
+  village: 'supplies', town: 'crafts', city: 'luxury',
+  manor: 'support', estate: 'authority', palace: 'sovereignty',
 };
 
 const structureUpkeep = {
@@ -73,7 +74,7 @@ const UNIT_DEFS = {
   longbow: { emoji: '🏹', cls: 'archer', terrainUpgrader: true },
   crossbow: { emoji: '🏹', cls: 'archer', terrainUpgrader: true },
   barrage_captain: { emoji: '🎖️', cls: 'archer', terrainUpgrader: true },
-  slinger: { emoji: '🪨', cls: 'archer', terrainUpgrader: false }, // exception
+  slinger: { emoji: '🪨', cls: 'archer', terrainUpgrader: false },
 
   horseman: { emoji: '🐎', cls: 'cavalry', terrainUpgrader: false },
   lancer: { emoji: '🗡️', cls: 'cavalry', terrainUpgrader: false },
@@ -83,11 +84,10 @@ const UNIT_DEFS = {
 
 const unitUpkeep = {
   worker: { crops: 1 }, laborer: { crops: 1 }, axman: { provisions: 1 }, rangehand: { crops: 1 }, surveyor: { crops: 1, livestock: 1 },
-  constable: { support: 1 },
+  constable: { support: 1 }, architect: { crops: 1 },
   spearman: { crops: 1 }, swordsman: { crops: 1 }, pikeman: { crops: 1 }, infantry_sergeant: { support: 1 },
   hunter: { crops: 1, wood: 1 }, longbow: { wood: 1 }, crossbow: { wood: 1, crops: 1 }, barrage_captain: { authority: 1 }, slinger: { crops: 1 },
   horseman: { crops: 1, livestock: 1 }, lancer: { crops: 1, livestock: 1 }, cavalry_archer: { crops: 1, wood: 1, livestock: 1 }, royal_knight: { sovereignty: 1 },
-  architect: { crops: 1 },
 };
 
 const freeUnitCondition = {
@@ -114,24 +114,17 @@ const TRAIN_AT = {
 };
 
 const UNIT_UPGRADE_OPTIONS = {
-  village: {
-    spearman: ['horseman', 'hunter'],
-    axman: ['horseman', 'hunter'],
-  },
+  village: { spearman: ['horseman', 'hunter'], axman: ['horseman', 'hunter'] },
   town: {
-    horseman: ['lancer'],
-    hunter: ['longbow'],
-    spearman: ['lancer', 'longbow'],
-    swordsman: ['lancer', 'longbow'],
+    horseman: ['lancer'], hunter: ['longbow'],
+    spearman: ['lancer', 'longbow'], swordsman: ['lancer', 'longbow'],
   },
   city: {
     spearman: ['crossbow', 'cavalry_archer'],
     swordsman: ['crossbow', 'cavalry_archer'],
     axman: ['crossbow', 'cavalry_archer'],
-    horseman: ['cavalry_archer'],
-    lancer: ['cavalry_archer'],
-    hunter: ['crossbow', 'cavalry_archer'],
-    longbow: ['crossbow', 'cavalry_archer'],
+    horseman: ['cavalry_archer'], lancer: ['cavalry_archer'],
+    hunter: ['crossbow', 'cavalry_archer'], longbow: ['crossbow', 'cavalry_archer'],
   },
 };
 
@@ -142,8 +135,6 @@ const upgradePaths = {
   manor: ['estate'], estate: ['palace'],
   outpost: ['stronghold'], stronghold: ['keep'],
 };
-
-const claimCost = { crops: 1 };
 
 const symbolSets = {
   forest: ['🌲', '🌳', '🦌', '🍄'], pasture: ['🐄', '🐑', '🐐', '🐎'], farm: ['🌾', '🌽', '🌱', '🌿'],
@@ -209,28 +200,54 @@ function placeStart(q, r, player) {
 placeStart(-MAP_RADIUS, MAP_RADIUS, 'blue');
 placeStart(MAP_RADIUS, -MAP_RADIUS, 'red');
 
-const resources = {
-  blue: Object.fromEntries(resourceKeys.map((k) => [k, 0])),
-  red: Object.fromEntries(resourceKeys.map((k) => [k, 0])),
-};
-resources.blue.crops = 2;
-resources.red.crops = 2;
-
 let currentPlayer = 'blue';
 let selectedKey = null;
+let lastDebug = '';
 
 function getTile(key) { return tiles.find((t) => keyOf(t) === key); }
 function getCellByKey(key) { const [q, r] = key.split(',').map(Number); return { q, r }; }
 function isAdjacent(a, b) { return DIRECTIONS.some(([dq, dr]) => a.q + dq === b.q && a.r + dr === b.r); }
-function canAfford(player, cost) { return Object.entries(cost).every(([k, v]) => (resources[player][k] || 0) >= v); }
-function spend(player, cost) { Object.entries(cost).forEach(([k, v]) => { resources[player][k] -= v; }); }
 
-function harvest(player) {
-  for (const tile of tiles) {
+function computeEconomy(player, tileSnapshot = tiles, unitSnapshot = units) {
+  const produced = Object.fromEntries(resourceKeys.map((k) => [k, 0]));
+  const used = Object.fromEntries(resourceKeys.map((k) => [k, 0]));
+
+  for (const tile of tileSnapshot) {
     if (tile.owner !== player) continue;
-    const resource = productionByType[tile.type];
-    if (resource) resources[player][resource] += 1;
+
+    const prodKey = productionByType[tile.type];
+    if (prodKey) produced[prodKey] += 1;
+
+    const sNeed = structureUpkeep[tile.type] || {};
+    for (const [res, amt] of Object.entries(sNeed)) used[res] += amt;
+
+    const unit = unitSnapshot.get(keyOf(tile));
+    if (!unit || unit.player !== player) continue;
+    if (freeUnitCondition[unit.type]?.(tile)) continue;
+    const uNeed = unitUpkeep[unit.type] || {};
+    for (const [res, amt] of Object.entries(uNeed)) used[res] += amt;
   }
+
+  const available = Object.fromEntries(resourceKeys.map((k) => [k, produced[k] - used[k]]));
+  return { produced, used, available };
+}
+
+function economyDeficits(player, tileSnapshot = tiles, unitSnapshot = units) {
+  const eco = computeEconomy(player, tileSnapshot, unitSnapshot);
+  return Object.entries(eco.available).filter(([, v]) => v < 0).map(([k, v]) => `${k} ${v}`);
+}
+
+function cloneUnits(src) {
+  const m = new Map();
+  for (const [k, v] of src.entries()) m.set(k, { ...v });
+  return m;
+}
+
+function isActionSustainable(player, mutator) {
+  const tSnap = tiles.map((t) => ({ ...t }));
+  const uSnap = cloneUnits(units);
+  mutator(tSnap, uSnap);
+  return economyDeficits(player, tSnap, uSnap).length === 0;
 }
 
 function nearestProducerDistance(player, resource, fromTile) {
@@ -239,48 +256,18 @@ function nearestProducerDistance(player, resource, fromTile) {
   return Math.min(...producers.map((p) => cubeDistance(fromTile, p)));
 }
 
-function calculateProduction(player) {
-  const out = Object.fromEntries(resourceKeys.map((k) => [k, 0]));
-  for (const tile of tiles) {
-    if (tile.owner !== player) continue;
-    const resource = productionByType[tile.type];
-    if (resource) out[resource] += 1;
-  }
-  return out;
-}
-
-function calculateNeeds(player) {
-  const out = Object.fromEntries(resourceKeys.map((k) => [k, 0]));
-  for (const tile of tiles) {
-    if (tile.owner !== player) continue;
-
-    const sNeed = structureUpkeep[tile.type] || {};
-    for (const [resource, amount] of Object.entries(sNeed)) out[resource] += amount;
-
-    const unit = units.get(keyOf(tile));
-    if (!unit || unit.player !== player) continue;
-    if (freeUnitCondition[unit.type]?.(tile)) continue;
-
-    const uNeed = unitUpkeep[unit.type] || {};
-    for (const [resource, amount] of Object.entries(uNeed)) out[resource] += amount;
-  }
-  return out;
-}
-
 function enforceShortages(player) {
   const logs = [];
   for (const resource of resourceKeys) {
-    const production = calculateProduction(player)[resource];
-    const need = calculateNeeds(player)[resource];
-    let deficit = need - production;
+    const { produced, used } = computeEconomy(player);
+    let deficit = used[resource] - produced[resource];
     if (deficit <= 0) continue;
 
     const unitConsumers = [];
     for (const [key, unit] of units.entries()) {
       if (unit.player !== player) continue;
       const tile = getTile(key);
-      if (!tile) continue;
-      if (freeUnitCondition[unit.type]?.(tile)) continue;
+      if (!tile || freeUnitCondition[unit.type]?.(tile)) continue;
       const amount = (unitUpkeep[unit.type] || {})[resource] || 0;
       if (!amount) continue;
       unitConsumers.push({ key, amount, dist: nearestProducerDistance(player, resource, tile), unitType: unit.type });
@@ -323,6 +310,21 @@ function resetTurnActions(player) {
   }
 }
 
+function explainMoveFailure(fromKey, toKey) {
+  if (!cellKeys.has(fromKey) || !cellKeys.has(toKey)) return 'Move invalid: out of map bounds.';
+  if (fromKey === toKey) return 'Move invalid: source and destination are the same tile.';
+  const from = getCellByKey(fromKey);
+  const to = getCellByKey(toKey);
+  if (!isAdjacent(from, to)) return 'Move invalid: destination is not adjacent.';
+  const unit = units.get(fromKey);
+  if (!unit) return 'Move invalid: no unit selected on source tile.';
+  if (unit.player !== currentPlayer) return `Move invalid: it is ${currentPlayer}'s turn.`;
+  if (unit.movesLeft <= 0) return 'Move invalid: unit has no moves left this turn.';
+  const destUnit = units.get(toKey);
+  if (destUnit && destUnit.player === unit.player) return 'Move invalid: destination occupied by your own unit.';
+  return 'Move invalid by rule constraints.';
+}
+
 function canMove(fromKey, toKey) {
   if (!cellKeys.has(fromKey) || !cellKeys.has(toKey) || fromKey === toKey) return false;
   const from = getCellByKey(fromKey);
@@ -341,25 +343,32 @@ function getTargets(fromKey) {
 }
 
 function moveUnit(fromKey, toKey) {
-  if (!canMove(fromKey, toKey)) return;
+  if (!canMove(fromKey, toKey)) {
+    lastDebug = explainMoveFailure(fromKey, toKey);
+    return;
+  }
+
   const unit = units.get(fromKey);
   const destTile = getTile(toKey);
   if (!unit || !destTile) return;
 
-  if (!destTile.owner && (UNIT_DEFS[unit.type]?.terrainUpgrader || unit.type === 'axman')) {
-    if (!canAfford(unit.player, claimCost)) {
-      statusText.textContent = `${unit.player.toUpperCase()} lacks crops to claim this tile.`;
-      return;
-    }
-    spend(unit.player, claimCost);
-    destTile.owner = unit.player;
-  } else if (!destTile.owner) {
-    destTile.owner = unit.player;
+  if (!isActionSustainable(currentPlayer, (tSnap, uSnap) => {
+    const srcUnit = uSnap.get(fromKey);
+    if (!srcUnit) return;
+    uSnap.delete(fromKey);
+    uSnap.set(toKey, { ...srcUnit, movesLeft: srcUnit.movesLeft - 1 });
+    const t = tSnap.find((x) => keyOf(x) === toKey);
+    if (t && !t.owner) t.owner = srcUnit.player;
+  })) {
+    lastDebug = `Move blocked: would create shortage for ${currentPlayer}.`;
+    return;
   }
 
+  if (!destTile.owner) destTile.owner = unit.player;
   unit.movesLeft -= 1;
   units.set(toKey, unit);
   units.delete(fromKey);
+  lastDebug = `Move ok: ${unit.type} moved to ${toKey}.`;
 }
 
 function upgradeSelectedTile(toType) {
@@ -368,45 +377,80 @@ function upgradeSelectedTile(toType) {
   const unit = units.get(selectedKey);
   if (!tile || !unit) return;
   if (unit.player !== currentPlayer || tile.owner !== currentPlayer) return;
-  if (!UNIT_DEFS[unit.type]?.terrainUpgrader || unit.actionsLeft <= 0) return;
+  if (!UNIT_DEFS[unit.type]?.terrainUpgrader) {
+    lastDebug = `${unit.type} cannot upgrade terrain.`;
+    return;
+  }
+  if (unit.actionsLeft <= 0) {
+    lastDebug = `${unit.type} has no actions left.`;
+    return;
+  }
+
+  if (!isActionSustainable(currentPlayer, (tSnap, uSnap) => {
+    const t = tSnap.find((x) => keyOf(x) === selectedKey);
+    if (t) t.type = toType;
+    const u = uSnap.get(selectedKey);
+    if (u) u.actionsLeft -= 1;
+  })) {
+    lastDebug = `Upgrade blocked: would create shortage for ${currentPlayer}.`;
+    return;
+  }
 
   unit.actionsLeft -= 1;
   tile.type = toType;
   tile.symbols = Array.from({ length: 6 }, () => pickSymbol(toType));
+  lastDebug = `Upgrade ok: ${selectedKey} -> ${toType}.`;
   render();
 }
 
 function trainUnitAt(key, unitType) {
   const tile = getTile(key);
   if (!tile || tile.owner !== currentPlayer || units.get(key)) return;
+
+  if (!isActionSustainable(currentPlayer, (_tSnap, uSnap) => {
+    uSnap.set(key, { player: currentPlayer, type: unitType, movesLeft: 0, actionsLeft: 0 });
+  })) {
+    lastDebug = `Training blocked: ${unitType} would create shortage for ${currentPlayer}.`;
+    return;
+  }
+
   units.set(key, { player: currentPlayer, type: unitType, movesLeft: 0, actionsLeft: 0 });
+  lastDebug = `Training ok: ${unitType} at ${key}.`;
   render();
 }
 
 function upgradeUnitAt(key, newType) {
+  const tile = getTile(key);
   const unit = units.get(key);
-  if (!unit || unit.player !== currentPlayer || unit.actionsLeft <= 0) return;
+  if (!tile || !unit || unit.player !== currentPlayer || unit.actionsLeft <= 0) return;
+
+  if (!isActionSustainable(currentPlayer, (_tSnap, uSnap) => {
+    const u = uSnap.get(key);
+    if (!u) return;
+    u.type = newType;
+    u.actionsLeft -= 1;
+  })) {
+    lastDebug = `Unit upgrade blocked: ${newType} would create shortage for ${currentPlayer}.`;
+    return;
+  }
+
   unit.type = newType;
   unit.actionsLeft -= 1;
+  lastDebug = `Unit upgrade ok: ${key} -> ${newType}.`;
   render();
 }
 
 function renderResources() {
-  const p = resources[currentPlayer];
+  const eco = computeEconomy(currentPlayer);
   resourcesEl.innerHTML = `
-    <strong>${currentPlayer.toUpperCase()} resources</strong>
-    <div class="resource-grid">
-      <span>🌽 crops</span><span>${p.crops}</span>
-      <span>🌲 wood</span><span>${p.wood}</span>
-      <span>🐄 livestock</span><span>${p.livestock}</span>
-      <span>🏚️ provisions</span><span>${p.provisions}</span>
-      <span>🏡 supplies</span><span>${p.supplies}</span>
-      <span>🏘️ crafts</span><span>${p.crafts}</span>
-      <span>💎 luxury</span><span>${p.luxury}</span>
-      <span>🤝 support</span><span>${p.support}</span>
-      <span>🫅 authority</span><span>${p.authority}</span>
-      <span>👑 sovereignty</span><span>${p.sovereignty}</span>
-    </div>
+    <strong>${currentPlayer.toUpperCase()} economy</strong>
+    <table style="width:100%;font-size:12px;border-collapse:collapse;margin-top:6px;">
+      <thead><tr><th style="text-align:left;">Resource</th><th>Prod</th><th>Use</th><th>Avail</th></tr></thead>
+      <tbody>
+        ${resourceKeys.map((k) => `<tr><td>${k}</td><td style="text-align:center;">${eco.produced[k]}</td><td style="text-align:center;">${eco.used[k]}</td><td style="text-align:center;">${eco.available[k]}</td></tr>`).join('')}
+      </tbody>
+    </table>
+    <div style="margin-top:6px;font-size:12px;opacity:.85;">Continuous model: produced and used every turn; nothing is one-time spent.</div>
   `;
 }
 
@@ -437,6 +481,8 @@ function renderSelectionPanel() {
     for (const newType of uOpts) html += `<button data-upgrade-unit="${newType}">Upgrade Unit → ${newType}</button>`;
   }
 
+  html += `<div style="margin-top:8px;font-size:12px;opacity:.9;"><strong>Debug:</strong> ${lastDebug || '—'}</div>`;
+
   selectionEl.innerHTML = html;
   selectionEl.querySelectorAll('button[data-upgrade-terrain]').forEach((btn) => {
     btn.addEventListener('click', () => upgradeSelectedTile(btn.dataset.upgradeTerrain));
@@ -456,16 +502,16 @@ function renderStatus(logs = []) {
   }
 
   if (!selectedKey) {
-    statusText.textContent = `${currentPlayer.toUpperCase()} turn. Axman/archer terrain-upgraders can move+upgrade or upgrade+move (1 each).`;
+    statusText.textContent = `${currentPlayer.toUpperCase()} turn. Move/upgrade diagnostics shown in Debug panel.`;
     return;
   }
 
   const unit = units.get(selectedKey);
   if (!unit) {
-    statusText.textContent = `${currentPlayer.toUpperCase()} turn. Tile selected.`;
+    statusText.textContent = `${currentPlayer.toUpperCase()} turn. Tile selected. ${lastDebug || ''}`;
     return;
   }
-  statusText.textContent = `${unit.player.toUpperCase()} ${unit.type} selected. ${getTargets(selectedKey).length} legal moves. M:${unit.movesLeft} A:${unit.actionsLeft}`;
+  statusText.textContent = `${unit.player.toUpperCase()} ${unit.type} selected. ${getTargets(selectedKey).length} legal moves. M:${unit.movesLeft} A:${unit.actionsLeft}. ${lastDebug || ''}`;
 }
 
 function renderSpearmanGlyph(pos) {
@@ -478,11 +524,9 @@ function renderSpearmanGlyph(pos) {
   shaft.setAttribute('stroke', '#fff');
   shaft.setAttribute('stroke-width', '3');
   shaft.setAttribute('stroke-linecap', 'round');
-
   const tip = document.createElementNS('http://www.w3.org/2000/svg', 'polygon');
   tip.setAttribute('points', `${pos.x + 12},${pos.y - 12} ${pos.x + 5},${pos.y - 11} ${pos.x + 11},${pos.y - 5}`);
   tip.setAttribute('fill', '#fff');
-
   group.appendChild(shaft);
   group.appendChild(tip);
   return group;
@@ -510,16 +554,17 @@ function render(logs = []) {
   for (let mq = -86; mq <= 86; mq += 1) {
     for (let mr = -86; mr <= 86; mr += 1) {
       const miniPos = axialToPixel({ q: mq, r: mr }, MINI_RADIUS);
-      if (miniPos.x < -150 || miniPos.x > 2600 || miniPos.y < -150 || miniPos.y > 2300) continue;
       globalMini.push({ mq, mr, pos: miniPos, idx: ((mq - mr) % 3 + 3) % 3 });
     }
   }
 
   const tileCenters = tiles.map((tile) => ({ tile, pos: axialToPixel(tile) }));
 
-  // Mosaic first: pick one dominant tile (largest portion proxy = nearest center) and paint whole mini hex with it.
+  // Dominant-bleed mosaic with map-edge cutoff: skip mini hexes too far from any map tile center.
   const mosaicGroup = document.createElementNS('http://www.w3.org/2000/svg', 'g');
   mosaicGroup.setAttribute('pointer-events', 'none');
+  const edgeCutoff = (HEX_RADIUS * 1.2) ** 2;
+
   for (const mini of globalMini) {
     let best = null;
     let bestDist = Infinity;
@@ -532,7 +577,7 @@ function render(logs = []) {
         best = tc.tile;
       }
     }
-    if (!best) continue;
+    if (!best || bestDist > edgeCutoff) continue;
 
     const ownerTint = ownerColor(best.owner);
     const miniPoly = document.createElementNS('http://www.w3.org/2000/svg', 'polygon');
@@ -589,6 +634,13 @@ function render(logs = []) {
       ring.setAttribute('r', '17');
       ring.setAttribute('class', 'unit-ring');
       ring.setAttribute('fill', unit.player === 'blue' ? '#2563eb' : '#dc2626');
+
+      const selected = selectedKey === key;
+      const canAct = unit.player === currentPlayer && (unit.movesLeft > 0 || unit.actionsLeft > 0);
+      const strokeColor = selected ? '#facc15' : (canAct ? '#ffffff' : '#111111');
+      ring.setAttribute('stroke', strokeColor);
+      ring.setAttribute('stroke-width', selected ? '4' : '2.5');
+
       group.appendChild(ring);
 
       renderUnitGlyph(unit, pos, group);
@@ -615,16 +667,20 @@ board.addEventListener('click', (event) => {
     return;
   }
 
+  if (selectedKey && !canMove(selectedKey, key) && units.get(selectedKey)) {
+    lastDebug = explainMoveFailure(selectedKey, key);
+  }
+
   selectedKey = (clickedUnit || getTile(key)) ? key : null;
   render();
 });
 
 endTurnBtn.addEventListener('click', () => {
-  harvest(currentPlayer);
   const logs = [...enforceShortages('blue'), ...enforceShortages('red')];
   currentPlayer = currentPlayer === 'blue' ? 'red' : 'blue';
   resetTurnActions(currentPlayer);
   selectedKey = null;
+  lastDebug = 'Turn advanced. Economy table reflects continuous produced/used/available flow.';
   render(logs);
 });
 
