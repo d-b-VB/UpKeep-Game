@@ -100,6 +100,11 @@ const freeUnitCondition = {
   surveyor: (tile) => tile.type === 'pasture',
 };
 
+function movePointsFor(unitType) {
+  if (['horseman', 'lancer', 'cavalry_archer', 'royal_knight'].includes(unitType)) return 3;
+  return 1;
+}
+
 const TRAIN_AT = {
   homestead: ['axman'],
   village: ['worker', 'spearman'],
@@ -355,7 +360,7 @@ function enforceShortages(player) {
 function resetTurnActions(player) {
   for (const unit of units.values()) {
     if (unit.player === player) {
-      unit.movesLeft = 1;
+      unit.movesLeft = movePointsFor(unit.type);
       unit.actionsLeft = 1;
     }
   }
@@ -532,7 +537,7 @@ function trainUnitAt(key, unitType) {
     return;
   }
 
-  units.set(key, { player: currentPlayer, type: unitType, movesLeft: 0, actionsLeft: 0 });
+  units.set(key, { player: currentPlayer, type: unitType, movesLeft: movePointsFor(unitType), actionsLeft: 1 });
   lastDebug = `Training ok: ${unitType} at ${key}.`;
   render();
 }
@@ -731,11 +736,27 @@ function render(logs = []) {
 
     if (tile.owner === currentPlayer) {
       const verts = polygonVertices(pos, HEX_RADIUS);
-      DIRECTIONS.forEach(([dq, dr], i) => {
-        const neighbor = tileMap.get(`${tile.q + dq},${tile.r + dr}`);
-        if (neighbor?.owner === tile.owner) return;
+      for (let i = 0; i < 6; i += 1) {
         const [x1, y1] = verts[i];
         const [x2, y2] = verts[(i + 1) % 6];
+        const mx = (x1 + x2) / 2;
+        const my = (y1 + y2) / 2;
+
+        let nearestNeighbor = null;
+        let best = Infinity;
+        for (const [dq, dr] of DIRECTIONS) {
+          const n = tileMap.get(`${tile.q + dq},${tile.r + dr}`);
+          if (!n) continue;
+          const nPos = axialToPixel(n);
+          const d = (nPos.x - mx) ** 2 + (nPos.y - my) ** 2;
+          if (d < best) {
+            best = d;
+            nearestNeighbor = n;
+          }
+        }
+
+        if (nearestNeighbor?.owner === tile.owner) continue;
+
         const edge = document.createElementNS('http://www.w3.org/2000/svg', 'line');
         edge.setAttribute('x1', String(x1));
         edge.setAttribute('y1', String(y1));
@@ -746,7 +767,7 @@ function render(logs = []) {
         edge.setAttribute('stroke-linecap', 'round');
         edge.setAttribute('pointer-events', 'none');
         board.appendChild(edge);
-      });
+      }
     }
 
     tile.symbols.forEach((symbol, i) => {
