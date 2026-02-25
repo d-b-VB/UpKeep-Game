@@ -662,7 +662,7 @@ function render(logs = []) {
       board.appendChild(outline);
     }
 
-    if (tile.owner) {
+    if (tile.owner === currentPlayer) {
       const verts = polygonVertices(pos, HEX_RADIUS);
       DIRECTIONS.forEach(([dq, dr], i) => {
         const neighbor = tileMap.get(`${tile.q + dq},${tile.r + dr}`);
@@ -710,8 +710,8 @@ function render(logs = []) {
       const selected = selectedKey === key;
       const canAct = unit.player === currentPlayer && (unit.movesLeft > 0 || unit.actionsLeft > 0);
       const strokeColor = selected ? '#facc15' : (canAct ? '#ffffff' : '#111111');
-      ring.setAttribute('stroke', strokeColor);
-      ring.setAttribute('stroke-width', selected ? '4' : '2.5');
+      ring.style.stroke = strokeColor;
+      ring.style.strokeWidth = selected ? '4px' : '2.5px';
 
       group.appendChild(ring);
 
