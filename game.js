@@ -361,6 +361,61 @@ function resetTurnActions(player) {
   }
 }
 
+function isMeleeMilitary(unitType) {
+  return ['spearman', 'swordsman', 'pikeman', 'infantry_sergeant', 'horseman', 'lancer', 'royal_knight', 'axman'].includes(unitType);
+}
+
+function unitAtKey(key) {
+  return units.get(key);
+}
+
+function adjacentKeys(key) {
+  const c = getCellByKey(key);
+  return DIRECTIONS
+    .map(([dq, dr]) => `${c.q + dq},${c.r + dr}`)
+    .filter((k) => cellKeys.has(k));
+}
+
+function terrainClosed(tileType) {
+  return ['forest', 'town', 'city', 'outpost', 'stronghold', 'keep'].includes(tileType);
+}
+
+function isTileClosedFor(player, key) {
+  const tile = getTile(key);
+  if (!tile) return true;
+  if (terrainClosed(tile.type)) return true;
+
+  // Pikeman closes adjacent tiles for enemies only.
+  for (const nKey of adjacentKeys(key)) {
+    const u = unitAtKey(nKey);
+    if (u?.type === 'pikeman' && u.player !== player) return true;
+  }
+
+  // Spearman shield wall closes adjacent tiles for enemies only.
+  for (const nKey of adjacentKeys(key)) {
+    const spear = unitAtKey(nKey);
+    if (!spear || spear.type !== 'spearman') continue;
+    if (spear.player === player) continue;
+
+    const friends = adjacentKeys(key)
+      .map((k) => unitAtKey(k))
+      .filter((u) => u && u.player === spear.player && isMeleeMilitary(u.type));
+
+    if (friends.length >= 2) return true; // spear + another friendly melee military unit
+  }
+
+  return false;
+}
+
+function canUseLongWeaponFrom(key, unitType) {
+  // Spears/pikes/lances may be used while LEAVING closed spaces (per updated rule).
+  // Longbow remains ineffective from closed spaces.
+  if (unitType !== 'longbow') return true;
+  const unit = unitAtKey(key);
+  const player = unit?.player || currentPlayer;
+  return !isTileClosedFor(player, key);
+}
+
 function explainMoveFailure(fromKey, toKey) {
   if (!cellKeys.has(fromKey) || !cellKeys.has(toKey)) return 'Move invalid: out of map bounds.';
   if (fromKey === toKey) return 'Move invalid: source and destination are the same tile.';
@@ -373,6 +428,13 @@ function explainMoveFailure(fromKey, toKey) {
   if (unit.movesLeft <= 0) return 'Move invalid: unit has no moves left this turn.';
   const destUnit = units.get(toKey);
   if (destUnit && destUnit.player === unit.player) return 'Move invalid: destination occupied by your own unit.';
+
+  if (destUnit && destUnit.player !== unit.player) {
+    if (['spearman', 'pikeman', 'lancer'].includes(unit.type) && isTileClosedFor(unit.player, toKey)) {
+      return `Attack invalid: ${unit.type} cannot attack into closed terrain.`;
+    }
+  }
+
   return 'Move invalid by rule constraints.';
 }
 
@@ -385,8 +447,13 @@ function canMove(fromKey, toKey) {
   const unit = units.get(fromKey);
   const destinationUnit = units.get(toKey);
   if (!unit || unit.player !== currentPlayer || unit.movesLeft <= 0) return false;
-  if (!destinationUnit) return true;
-  return destinationUnit.player !== unit.player;
+  if (destinationUnit && destinationUnit.player === unit.player) return false;
+
+  if (destinationUnit && destinationUnit.player !== unit.player) {
+    if (['spearman', 'pikeman', 'lancer'].includes(unit.type) && isTileClosedFor(unit.player, toKey)) return false;
+  }
+
+  return true;
 }
 
 function getTargets(fromKey) {
