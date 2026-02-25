@@ -5,11 +5,10 @@ const selectionEl = document.getElementById('selection');
 const endTurnBtn = document.getElementById('end-turn');
 
 const HEX_RADIUS = 44;
-const MINI_RADIUS = 7.6;
+const MINI_RADIUS = 8;
 const ORIGIN = { x: 620, y: 520 };
 const DIRECTIONS = [[1, 0], [1, -1], [0, -1], [-1, 0], [-1, 1], [0, 1]];
-
-const MAP_RADIUS = 4; // 2 more rings beyond previous radius 2 => 61 tiles
+const MAP_RADIUS = 4; // 61 tiles
 
 const weightedTypes = [
   ...Array(64).fill('forest'),
@@ -19,6 +18,8 @@ const weightedTypes = [
   ...Array(4).fill('village'),
   ...Array(2).fill('town'),
   ...Array(1).fill('city'),
+  ...Array(1).fill('manor'),
+  ...Array(1).fill('outpost'),
 ];
 
 const tilePalettes = {
@@ -29,9 +30,15 @@ const tilePalettes = {
   village: ['#d8b49c', '#c97b63', '#f1cf9d'],
   town: ['#a9b7c6', '#e89a9a', '#ffd57d'],
   city: ['#e3e3e3', '#cdd5db', '#a9b7c0'],
+  manor: ['#d7c7af', '#b79d86', '#cbb8a0'],
+  estate: ['#d5d9f6', '#b8c2f6', '#9eaaf5'],
+  palace: ['#f3e5ab', '#e8d26e', '#f0ce5a'],
+  outpost: ['#cbbeb5', '#a88f86', '#8f7b72'],
+  stronghold: ['#b0b0b0', '#8f8f8f', '#cacaca'],
+  keep: ['#d0c2ac', '#b6a58b', '#988a72'],
 };
 
-const resourceByType = {
+const productionByType = {
   forest: 'wood',
   pasture: 'livestock',
   farm: 'crops',
@@ -39,12 +46,22 @@ const resourceByType = {
   village: 'supplies',
   town: 'crafts',
   city: 'luxury',
+  manor: 'support',
+  estate: 'authority',
+  palace: 'sovereignty',
 };
 
+// Explicit upkeep logic aligned with your rules + the broader chains discussed.
 const structureUpkeep = {
   village: { wood: 1 },
   town: { wood: 1, crops: 1, supplies: 1 },
   city: { wood: 1, crops: 1, livestock: 1, supplies: 1, crafts: 1 },
+  manor: { supplies: 1 },
+  estate: { support: 1, supplies: 1, crafts: 1 },
+  palace: { authority: 1, support: 1, supplies: 1, crafts: 1, luxury: 1 },
+  outpost: { supplies: 1 },
+  stronghold: { crafts: 1 },
+  keep: { luxury: 1 },
 };
 
 const unitUpkeep = {
@@ -61,18 +78,13 @@ const upgradePaths = {
   forest: ['pasture'],
   pasture: ['farm'],
   farm: ['homestead'],
-  homestead: ['village'],
+  homestead: ['village', 'manor', 'outpost'],
   village: ['town'],
   town: ['city'],
-};
-
-const upgradeCost = {
-  pasture: { wood: 1 },
-  farm: { livestock: 1 },
-  homestead: { crops: 2 },
-  village: { provisions: 2 },
-  town: { supplies: 2 },
-  city: { crafts: 2 },
+  manor: ['estate'],
+  estate: ['palace'],
+  outpost: ['stronghold'],
+  stronghold: ['keep'],
 };
 
 const claimCost = { crops: 1 };
@@ -81,13 +93,21 @@ const symbolSets = {
   forest: ['🌲', '🌳', '🦌', '🍄'],
   pasture: ['🐄', '🐑', '🐐', '🐎'],
   farm: ['🌾', '🌽', '🌱', '🌿'],
-  homestead: ['🏚️', '🦌', '🍄', '🥕', '🏠', '🌲'],
+  homestead: ['🌲', '🥕', '🐐', '🏚️', '🍄', '🐓'],
   village: ['🏡', '🐔', '🥬', '⛪', '🏫', '🐖'],
   town: ['🏘️', '🥖', '🍻', '🏤', '🕍', '🐖'],
   city: ['🏙️', '🥐', '🍷', '🏥', '🏫', '⛪'],
+  manor: ['🏛️', '⚜️', '♦️', '🌸', '⚜️', '♦️'],
+  estate: ['🏦', '♦️', '⚜️', '♦️', '⚜️', '♦️'],
+  palace: ['🏟️', '👑', '⚜️', '👑', '⚜️', '👑'],
+  outpost: ['🗼', '🛡️', '🗼', '🛡️', '🗼', '🛡️'],
+  stronghold: ['🧱', '🗼', '🛡️', '🧱', '🗼', '🛡️'],
+  keep: ['🏰', '🗼', '🧱', '🛡️', '🧱', '🛡️'],
 };
 
-const resourceKeys = ['crops', 'wood', 'livestock', 'provisions', 'supplies', 'crafts', 'luxury'];
+const resourceKeys = [
+  'crops', 'wood', 'livestock', 'provisions', 'supplies', 'crafts', 'luxury', 'support', 'authority', 'sovereignty',
+];
 
 function keyOf(cell) { return `${cell.q},${cell.r}`; }
 function randomType() { return weightedTypes[Math.floor(Math.random() * weightedTypes.length)]; }
@@ -108,12 +128,11 @@ const cellKeys = new Set(cells.map(keyOf));
 
 const tiles = cells.map((cell) => {
   const type = randomType();
-  const set = symbolSets[type];
   return {
     ...cell,
     type,
     owner: null,
-    symbols: Array.from({ length: 6 }, () => set[Math.floor(Math.random() * set.length)]),
+    symbols: Array.from({ length: 6 }, () => pickSymbol(type)),
   };
 });
 
@@ -125,29 +144,31 @@ function placeStart(q, r, player) {
   tile.type = 'homestead';
   tile.owner = player;
   tile.symbols = Array.from({ length: 6 }, () => pickSymbol('homestead'));
-  units.set(`${q},${r}`, { player, type: 'woodsman' });
+  units.set(`${q},${r}`, { player, type: 'woodsman', movesLeft: 1, actionsLeft: 1 });
 }
 
 placeStart(-MAP_RADIUS, MAP_RADIUS, 'blue');
 placeStart(MAP_RADIUS, -MAP_RADIUS, 'red');
 
 const resources = {
-  blue: { crops: 2, wood: 0, livestock: 0, provisions: 0, supplies: 0, crafts: 0, luxury: 0 },
-  red: { crops: 2, wood: 0, livestock: 0, provisions: 0, supplies: 0, crafts: 0, luxury: 0 },
+  blue: Object.fromEntries(resourceKeys.map((k) => [k, 0])),
+  red: Object.fromEntries(resourceKeys.map((k) => [k, 0])),
 };
+resources.blue.crops = 2;
+resources.red.crops = 2;
 
 let currentPlayer = 'blue';
 let selectedKey = null;
 
 function pickSymbol(type) {
-  const set = symbolSets[type];
+  const set = symbolSets[type] || ['⬜'];
   return set[Math.floor(Math.random() * set.length)];
 }
 
-function axialToPixel({ q, r }) {
+function axialToPixel({ q, r }, radius = HEX_RADIUS) {
   return {
-    x: ORIGIN.x + HEX_RADIUS * Math.sqrt(3) * (q + r / 2),
-    y: ORIGIN.y + HEX_RADIUS * 1.5 * r,
+    x: ORIGIN.x + radius * Math.sqrt(3) * (q + r / 2),
+    y: ORIGIN.y + radius * 1.5 * r,
   };
 }
 
@@ -156,13 +177,6 @@ function polygonPoints(center, radius, angleDeg = -30) {
     const angle = (Math.PI / 180) * (60 * i + angleDeg);
     return `${center.x + radius * Math.cos(angle)},${center.y + radius * Math.sin(angle)}`;
   }).join(' ');
-}
-
-function flatMiniCenter(q, r, sizeMini) {
-  return {
-    x: sizeMini * 1.5 * q,
-    y: sizeMini * Math.sqrt(3) * (r + q / 2),
-  };
 }
 
 function getCellByKey(key) {
@@ -189,7 +203,7 @@ function spend(player, cost) {
 function harvest(player) {
   for (const tile of tiles) {
     if (tile.owner !== player) continue;
-    const resource = resourceByType[tile.type];
+    const resource = productionByType[tile.type];
     if (resource) resources[player][resource] += 1;
   }
 }
@@ -201,7 +215,7 @@ function cubeDistance(a, b) {
 }
 
 function nearestProducerDistance(player, resource, fromTile) {
-  const producers = tiles.filter((t) => t.owner === player && resourceByType[t.type] === resource);
+  const producers = tiles.filter((t) => t.owner === player && productionByType[t.type] === resource);
   if (producers.length === 0) return 999;
   return Math.min(...producers.map((p) => cubeDistance(fromTile, p)));
 }
@@ -210,7 +224,7 @@ function calculateProduction(player) {
   const out = Object.fromEntries(resourceKeys.map((k) => [k, 0]));
   for (const tile of tiles) {
     if (tile.owner !== player) continue;
-    const resource = resourceByType[tile.type];
+    const resource = productionByType[tile.type];
     if (resource) out[resource] += 1;
   }
   return out;
@@ -287,6 +301,15 @@ function enforceShortages(player) {
   return logs;
 }
 
+function resetTurnActions(player) {
+  for (const unit of units.values()) {
+    if (unit.player === player) {
+      unit.movesLeft = 1;
+      unit.actionsLeft = 1;
+    }
+  }
+}
+
 function canMove(fromKey, toKey) {
   if (!cellKeys.has(fromKey) || !cellKeys.has(toKey) || fromKey === toKey) return false;
   const from = getCellByKey(fromKey);
@@ -295,7 +318,7 @@ function canMove(fromKey, toKey) {
 
   const unit = units.get(fromKey);
   const destinationUnit = units.get(toKey);
-  if (!unit || unit.player !== currentPlayer) return false;
+  if (!unit || unit.player !== currentPlayer || unit.movesLeft <= 0) return false;
 
   if (unit.type === 'woodsman') return !destinationUnit;
   if (unit.type === 'spearman') return !destinationUnit || destinationUnit.player !== unit.player;
@@ -325,6 +348,7 @@ function moveUnit(fromKey, toKey) {
     destTile.owner = unit.player;
   }
 
+  unit.movesLeft -= 1;
   units.set(toKey, unit);
   units.delete(fromKey);
 }
@@ -335,11 +359,9 @@ function upgradeSelectedTile(toType) {
   const unit = units.get(selectedKey);
   if (!tile || !unit) return;
   if (unit.type !== 'woodsman' || unit.player !== currentPlayer || tile.owner !== currentPlayer) return;
+  if (unit.actionsLeft <= 0) return;
 
-  const cost = upgradeCost[toType];
-  if (!cost || !canAfford(currentPlayer, cost)) return;
-
-  spend(currentPlayer, cost);
+  unit.actionsLeft -= 1;
   tile.type = toType;
   tile.symbols = Array.from({ length: 6 }, () => pickSymbol(toType));
   render();
@@ -357,8 +379,11 @@ function renderResources() {
       <span>🏡 supplies</span><span>${p.supplies}</span>
       <span>🏘️ crafts</span><span>${p.crafts}</span>
       <span>💎 luxury</span><span>${p.luxury}</span>
+      <span>🫱 support</span><span>${p.support}</span>
+      <span>🫅 authority</span><span>${p.authority}</span>
+      <span>👑 sovereignty</span><span>${p.sovereignty}</span>
     </div>
-    <div style="margin-top:6px;font-size:12px;opacity:.85;">Worker claiming cost: 🌽 1.</div>
+    <div style="margin-top:6px;font-size:12px;opacity:.85;">Woodsman claiming cost: 🌽 1.</div>
   `;
 }
 
@@ -373,15 +398,12 @@ function renderSelectionPanel() {
   if (!tile) return;
 
   let html = `<strong>Selected</strong><div>${tile.type} @ [${tile.q},${tile.r}]</div><div>owner: ${tile.owner || 'neutral'}</div>`;
-  if (unit) html += `<div>unit: ${unit.type} (${unit.player})</div>`;
+  if (unit) html += `<div>unit: ${unit.type} (${unit.player}) M:${unit.movesLeft} A:${unit.actionsLeft}</div>`;
 
-  if (unit && unit.type === 'woodsman' && unit.player === currentPlayer && tile.owner === currentPlayer) {
+  if (unit && unit.type === 'woodsman' && unit.player === currentPlayer && tile.owner === currentPlayer && unit.actionsLeft > 0) {
     const next = upgradePaths[tile.type] || [];
     next.forEach((toType) => {
-      const cost = upgradeCost[toType] || {};
-      const afford = canAfford(currentPlayer, cost);
-      const costLabel = Object.entries(cost).map(([k, v]) => `${k} ${v}`).join(', ');
-      html += `<button data-upgrade="${toType}" ${afford ? '' : 'disabled'}>Upgrade → ${toType} (${costLabel})</button>`;
+      html += `<button data-upgrade="${toType}">Upgrade → ${toType}</button>`;
     });
   }
 
@@ -398,7 +420,7 @@ function renderStatus(logs = []) {
   }
 
   if (!selectedKey) {
-    statusText.textContent = `${currentPlayer.toUpperCase()} turn. Select your woodsman (🔨) or spearman.`;
+    statusText.textContent = `${currentPlayer.toUpperCase()} turn. Select your woodsman (🪓) or spearman.`;
     return;
   }
 
@@ -407,7 +429,7 @@ function renderStatus(logs = []) {
     statusText.textContent = `${currentPlayer.toUpperCase()} turn. Tile selected.`;
     return;
   }
-  statusText.textContent = `${unit.player.toUpperCase()} ${unit.type} selected. ${getTargets(selectedKey).length} legal adjacent moves.`;
+  statusText.textContent = `${unit.player.toUpperCase()} ${unit.type} selected. ${getTargets(selectedKey).length} legal adjacent moves. M:${unit.movesLeft} A:${unit.actionsLeft}`;
 }
 
 function renderSpearmanGlyph(pos) {
@@ -435,35 +457,52 @@ function render(logs = []) {
   board.innerHTML = '';
   const targets = selectedKey ? new Set(getTargets(selectedKey)) : new Set();
 
+  // Global mini lattice once, then per-tile clipping => mathematically aligned boundaries.
+  const globalMini = [];
+  for (let mq = -64; mq <= 64; mq += 1) {
+    for (let mr = -64; mr <= 64; mr += 1) {
+      const miniPos = axialToPixel({ q: mq, r: mr }, MINI_RADIUS);
+      if (miniPos.x < -100 || miniPos.x > 1600 || miniPos.y < -100 || miniPos.y > 1400) continue;
+      globalMini.push({ mq, mr, pos: miniPos, idx: ((mq - mr) % 3 + 3) % 3 });
+    }
+  }
+
   for (const tile of tiles) {
     const key = keyOf(tile);
     const pos = axialToPixel(tile);
 
-    const hex = document.createElementNS('http://www.w3.org/2000/svg', 'polygon');
-    hex.setAttribute('class', 'hex');
-    hex.setAttribute('points', polygonPoints(pos, HEX_RADIUS));
-    hex.setAttribute('fill', 'transparent');
-    hex.setAttribute('stroke', 'none');
-    hex.dataset.key = key;
-    board.appendChild(hex);
+    const clickableHex = document.createElementNS('http://www.w3.org/2000/svg', 'polygon');
+    clickableHex.setAttribute('class', 'hex');
+    clickableHex.setAttribute('points', polygonPoints(pos, HEX_RADIUS));
+    clickableHex.setAttribute('fill', 'transparent');
+    clickableHex.setAttribute('stroke', 'none');
+    clickableHex.dataset.key = key;
+    board.appendChild(clickableHex);
+
+    const clipId = `clip-${key.replace(',', '-')}`;
+    const defs = document.createElementNS('http://www.w3.org/2000/svg', 'defs');
+    const clipPath = document.createElementNS('http://www.w3.org/2000/svg', 'clipPath');
+    clipPath.setAttribute('id', clipId);
+    const clipHex = document.createElementNS('http://www.w3.org/2000/svg', 'polygon');
+    clipHex.setAttribute('points', polygonPoints(pos, HEX_RADIUS));
+    clipPath.appendChild(clipHex);
+    defs.appendChild(clipPath);
+    board.appendChild(defs);
 
     const ownerTint = ownerColor(tile.owner);
     const mosaicGroup = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+    mosaicGroup.setAttribute('clip-path', `url(#${clipId})`);
     mosaicGroup.setAttribute('pointer-events', 'none');
 
-    for (let rq = -3; rq <= 3; rq += 1) {
-      for (let rr = -3; rr <= 3; rr += 1) {
-        const rs = -rq - rr;
-        if (Math.max(Math.abs(rq), Math.abs(rr), Math.abs(rs)) > 3) continue;
-        const mini = flatMiniCenter(rq, rr, MINI_RADIUS);
-        const miniPoly = document.createElementNS('http://www.w3.org/2000/svg', 'polygon');
-        miniPoly.setAttribute('points', polygonPoints({ x: pos.x + mini.x, y: pos.y + mini.y }, MINI_RADIUS, 0));
-        const idx = ((rq - rr) % 3 + 3) % 3;
-        const baseColor = tilePalettes[tile.type][idx];
-        miniPoly.setAttribute('fill', ownerTint && idx === 2 ? ownerTint : baseColor);
-        miniPoly.setAttribute('stroke', 'none');
-        mosaicGroup.appendChild(miniPoly);
-      }
+    for (const mini of globalMini) {
+      if (Math.abs(mini.pos.x - pos.x) > HEX_RADIUS + MINI_RADIUS * 4) continue;
+      if (Math.abs(mini.pos.y - pos.y) > HEX_RADIUS + MINI_RADIUS * 4) continue;
+      const miniPoly = document.createElementNS('http://www.w3.org/2000/svg', 'polygon');
+      miniPoly.setAttribute('points', polygonPoints(mini.pos, MINI_RADIUS));
+      const baseColor = tilePalettes[tile.type][mini.idx];
+      miniPoly.setAttribute('fill', ownerTint && mini.idx === 2 ? ownerTint : baseColor);
+      miniPoly.setAttribute('stroke', 'none');
+      mosaicGroup.appendChild(miniPoly);
     }
     board.appendChild(mosaicGroup);
 
@@ -544,8 +583,11 @@ endTurnBtn.addEventListener('click', () => {
   harvest(currentPlayer);
   const logs = [...enforceShortages('blue'), ...enforceShortages('red')];
   currentPlayer = currentPlayer === 'blue' ? 'red' : 'blue';
+  resetTurnActions(currentPlayer);
   selectedKey = null;
   render(logs);
 });
 
+resetTurnActions('blue');
+resetTurnActions('red');
 render();
