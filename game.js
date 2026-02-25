@@ -311,6 +311,21 @@ function isActionSustainable(player, mutator) {
   return economyDeficits(player, tSnap, uSnap).length === 0;
 }
 
+function canSupportTileUpgrade(player, fromType, toType) {
+  const { produced, used } = computeEconomy(player);
+  const fromNeed = structureUpkeep[fromType] || {};
+  const toNeed = structureUpkeep[toType] || {};
+
+  // Upgrades are allowed if the upgraded tile's own upkeep can be supported,
+  // regardless of unrelated shortages elsewhere in the economy.
+  for (const [res, amt] of Object.entries(toNeed)) {
+    const prior = fromNeed[res] || 0;
+    const afterUse = used[res] - prior + amt;
+    if (produced[res] < afterUse) return false;
+  }
+  return true;
+}
+
 function nearestProducerDistance(player, resource, fromTile) {
   const producers = tiles.filter((t) => t.owner === player && productionByType[t.type] === resource);
   if (producers.length === 0) return 999;
@@ -618,13 +633,8 @@ function upgradeSelectedTile(toType) {
     return;
   }
 
-  if (!isActionSustainable(currentPlayer, (tSnap, uSnap) => {
-    const t = tSnap.find((x) => keyOf(x) === selectedKey);
-    if (t) t.type = toType;
-    const u = uSnap.get(selectedKey);
-    if (u) u.actionsLeft -= 1;
-  })) {
-    lastDebug = `Upgrade blocked: would create shortage for ${currentPlayer}.`;
+  if (!canSupportTileUpgrade(currentPlayer, tile.type, toType)) {
+    lastDebug = `Upgrade blocked: ${toType} upkeep is not currently supportable.`;
     return;
   }
 
