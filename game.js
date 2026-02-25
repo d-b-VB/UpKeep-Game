@@ -74,7 +74,7 @@ const UNIT_DEFS = {
   longbow: { emoji: '🏹', cls: 'archer', terrainUpgrader: true },
   crossbow: { emoji: '🏹', cls: 'archer', terrainUpgrader: true },
   barrage_captain: { emoji: '🎖️', cls: 'archer', terrainUpgrader: true },
-  slinger: { emoji: '🪨', cls: 'archer', terrainUpgrader: false },
+  slinger: { emoji: '🪃', cls: 'defworker', terrainUpgrader: true }, // alias of rangehand
 
   horseman: { emoji: '🐎', cls: 'cavalry', terrainUpgrader: false },
   lancer: { emoji: '🗡️', cls: 'cavalry', terrainUpgrader: false },
@@ -109,7 +109,7 @@ const TRAIN_AT = {
   homestead: ['axman'],
   village: ['worker', 'spearman'],
   town: ['laborer', 'swordsman', 'horseman', 'hunter'],
-  city: ['architect', 'pikeman', 'lancer', 'longbow', 'slinger'],
+  city: ['architect', 'pikeman', 'lancer', 'longbow'],
   manor: ['rangehand'],
   estate: ['surveyor'],
   palace: ['constable'],
@@ -161,6 +161,11 @@ const homesteadAnimals = ['🦌', '🐗', '🐇', '🦃'];
 const homesteadVeg = ['🍄', '🥔', ...settlementVeg];
 
 const resourceKeys = ['crops', 'wood', 'livestock', 'provisions', 'supplies', 'crafts', 'luxury', 'support', 'authority', 'sovereignty'];
+
+const resourceEmoji = {
+  crops: '🌾', wood: '🪵', livestock: '🐑', provisions: '🥕', supplies: '📦',
+  crafts: '🛠️', luxury: '💎', support: '🤝', authority: '⚖️', sovereignty: '👑',
+};
 
 function keyOf(cell) { return `${cell.q},${cell.r}`; }
 function randomType() { return weightedTypes[Math.floor(Math.random() * weightedTypes.length)]; }
@@ -528,6 +533,31 @@ function getTargets(fromKey) {
   return cells.map(keyOf).filter((toKey) => canMove(fromKey, toKey));
 }
 
+
+function moveEconomyWarning(fromKey, toKey, nextMoves) {
+  const tSnap = tiles.map((t) => ({ ...t }));
+  const uSnap = cloneUnits(units);
+  const srcUnit = uSnap.get(fromKey);
+  if (!srcUnit) return '';
+
+  uSnap.delete(fromKey);
+  uSnap.set(toKey, { ...srcUnit, movesLeft: nextMoves });
+
+  const t = tSnap.find((x) => keyOf(x) === toKey);
+  if (t) {
+    const beforeOwner = t.owner;
+    if (beforeOwner === currentPlayer || beforeOwner == null) {
+      t.owner = currentPlayer;
+    } else {
+      t.owner = null;
+    }
+  }
+
+  const deficits = economyDeficits(currentPlayer, tSnap, uSnap);
+  if (!deficits.length) return '';
+  return `Warning: move may cause shortages (${deficits.join(', ')}). Units/tiles farthest from producers may be disbanded at turn rollover.`;
+}
+
 function moveUnit(fromKey, toKey) {
   if (!canMove(fromKey, toKey)) {
     lastDebug = explainMoveFailure(fromKey, toKey);
@@ -539,24 +569,38 @@ function moveUnit(fromKey, toKey) {
   if (!unit || !destTile) return;
 
   const nextMoves = isCavalry(unit.type) ? 0 : unit.movesLeft - 1;
+  const priorOwner = destTile.owner;
+  const warning = moveEconomyWarning(fromKey, toKey, nextMoves);
 
-  if (!isActionSustainable(currentPlayer, (tSnap, uSnap) => {
-    const srcUnit = uSnap.get(fromKey);
-    if (!srcUnit) return;
-    uSnap.delete(fromKey);
-    uSnap.set(toKey, { ...srcUnit, movesLeft: nextMoves });
-    const t = tSnap.find((x) => keyOf(x) === toKey);
-    if (t && !t.owner) t.owner = srcUnit.player;
-  })) {
-    lastDebug = `Move blocked: would create shortage for ${currentPlayer}.`;
-    return;
-  }
-
-  if (!destTile.owner) destTile.owner = unit.player;
+  // Movement never blocked by economy; shortages resolve on turn rollover.
   unit.movesLeft = nextMoves;
   units.set(toKey, unit);
   units.delete(fromKey);
-  lastDebug = `Move ok: ${unit.type} moved to ${toKey}.`;
+
+  let claimText = '';
+  if (priorOwner === currentPlayer) {
+    claimText = 'holding friendly territory';
+  } else if (priorOwner === null) {
+    destTile.owner = currentPlayer;
+    if (economyDeficits(currentPlayer).length > 0) {
+      // Optional claim fallback for risky land.
+      destTile.owner = null;
+      claimText = 'stood on neutral tile without claiming (would create shortage)';
+    } else {
+      claimText = 'claimed neutral tile';
+    }
+  } else {
+    // Stepping onto enemy territory captures it unless that would cause shortage; then neutralize it.
+    destTile.owner = currentPlayer;
+    if (economyDeficits(currentPlayer).length > 0) {
+      destTile.owner = null;
+      claimText = `contested enemy tile and left it neutral (claim would create shortage)`;
+    } else {
+      claimText = `captured ${priorOwner} territory`;
+    }
+  }
+
+  lastDebug = `Move ok: ${unit.type} moved to ${toKey}, ${claimText}. ${warning}`.trim();
 }
 
 function upgradeSelectedTile(toType) {
@@ -635,10 +679,14 @@ function renderResources() {
     <table style="width:100%;font-size:12px;border-collapse:collapse;margin-top:6px;">
       <thead><tr><th style="text-align:left;">Resource</th><th>Prod</th><th>Use</th><th>Avail</th></tr></thead>
       <tbody>
-        ${resourceKeys.map((k) => `<tr><td>${k}</td><td style="text-align:center;">${eco.produced[k]}</td><td style="text-align:center;">${eco.used[k]}</td><td style="text-align:center;">${eco.available[k]}</td></tr>`).join('')}
+        ${resourceKeys.map((k) => {
+          const avail = eco.available[k];
+          const availStyle = avail < 0 ? 'color:#ef4444;font-weight:700;text-align:center;' : 'text-align:center;';
+          return `<tr><td>${resourceEmoji[k] || ''} ${k}</td><td style="text-align:center;">${eco.produced[k]}</td><td style="text-align:center;">${eco.used[k]}</td><td style="${availStyle}">${avail}</td></tr>`;
+        }).join('')}
       </tbody>
     </table>
-    <div style="margin-top:6px;font-size:12px;opacity:.85;">Continuous model: produced and used every turn; nothing is one-time spent.</div>
+    <div style="margin-top:6px;font-size:12px;opacity:.85;">Continuous model: produced and used every turn; negative values are shortages (red).</div>
   `;
 }
 
@@ -859,14 +907,35 @@ function render(logs = []) {
       ring.setAttribute('r', '17');
       ring.setAttribute('class', 'unit-ring');
       ring.setAttribute('fill', unit.player === 'blue' ? '#2563eb' : '#dc2626');
+      ring.style.stroke = 'none';
+      group.appendChild(ring);
 
       const selected = selectedKey === key;
-      const canAct = unit.player === currentPlayer && (unit.movesLeft > 0 || unit.actionsLeft > 0);
-      const strokeColor = selected ? '#facc15' : (canAct ? '#ffffff' : '#111111');
-      ring.style.stroke = strokeColor;
-      ring.style.strokeWidth = selected ? '4px' : '2.5px';
+      const isCurrent = unit.player === currentPlayer;
+      const moveReady = isCurrent && unit.movesLeft > 0;
+      const actionReady = isCurrent && unit.actionsLeft > 0;
+      const moveColor = selected ? '#facc15' : (moveReady ? '#ffffff' : '#111111');
+      const actionColor = selected ? '#facc15' : (actionReady ? '#ffffff' : '#111111');
+      const ringWidth = selected ? 4 : 2.5;
+      const rr = 17;
 
-      group.appendChild(ring);
+      function addRingHalf(isTop, color) {
+        const arc = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+        const y = pos.y;
+        const xLeft = pos.x - rr;
+        const xRight = pos.x + rr;
+        const sweep = isTop ? 1 : 0;
+        arc.setAttribute('d', `M ${xLeft} ${y} A ${rr} ${rr} 0 0 ${sweep} ${xRight} ${y}`);
+        arc.setAttribute('fill', 'none');
+        arc.setAttribute('stroke', color);
+        arc.setAttribute('stroke-width', String(ringWidth));
+        arc.setAttribute('stroke-linecap', 'round');
+        group.appendChild(arc);
+      }
+
+      // Top half = action state (hands), bottom half = move state (feet).
+      addRingHalf(true, actionColor);
+      addRingHalf(false, moveColor);
 
       renderUnitGlyph(unit, pos, group);
       board.appendChild(group);
