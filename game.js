@@ -421,16 +421,70 @@ function canUseLongWeaponFrom(key, unitType) {
   return !isTileClosedFor(player, key);
 }
 
+function isCavalry(unitType) {
+  return ['horseman', 'lancer', 'cavalry_archer', 'royal_knight'].includes(unitType);
+}
+
+function getCavalryDestinations(fromKey, unit) {
+  const maxSteps = Math.max(1, unit.movesLeft);
+  const startPlayer = unit.player;
+  const queue = [{ key: fromKey, steps: 0 }];
+  const bestSteps = new Map([[fromKey, 0]]);
+  const destinations = new Set();
+
+  while (queue.length) {
+    const current = queue.shift();
+    if (!current) break;
+
+    for (const nextKey of adjacentKeys(current.key)) {
+      const step = current.steps + 1;
+      if (step > maxSteps) continue;
+
+      const occ = unitAtKey(nextKey);
+      if (occ && occ.player === startPlayer) continue;
+
+      const nextClosed = isTileClosedFor(startPlayer, nextKey);
+
+      // You may pass THROUGH open tiles only.
+      const canPass = !nextClosed && !occ;
+      const canStop = true; // can end in open or closed, with or without enemy
+
+      if (canStop) {
+        destinations.add(nextKey);
+      }
+
+      if (canPass) {
+        const seen = bestSteps.get(nextKey);
+        if (seen === undefined || step < seen) {
+          bestSteps.set(nextKey, step);
+          queue.push({ key: nextKey, steps: step });
+        }
+      }
+    }
+  }
+
+  destinations.delete(fromKey);
+  return destinations;
+}
+
 function explainMoveFailure(fromKey, toKey) {
   if (!cellKeys.has(fromKey) || !cellKeys.has(toKey)) return 'Move invalid: out of map bounds.';
   if (fromKey === toKey) return 'Move invalid: source and destination are the same tile.';
-  const from = getCellByKey(fromKey);
-  const to = getCellByKey(toKey);
-  if (!isAdjacent(from, to)) return 'Move invalid: destination is not adjacent.';
+
   const unit = units.get(fromKey);
   if (!unit) return 'Move invalid: no unit selected on source tile.';
   if (unit.player !== currentPlayer) return `Move invalid: it is ${currentPlayer}'s turn.`;
   if (unit.movesLeft <= 0) return 'Move invalid: unit has no moves left this turn.';
+
+  if (isCavalry(unit.type)) {
+    const targets = getCavalryDestinations(fromKey, unit);
+    if (!targets.has(toKey)) return 'Move invalid: cavalry can only end on highlighted destinations reached through open-path routing.';
+  } else {
+    const from = getCellByKey(fromKey);
+    const to = getCellByKey(toKey);
+    if (!isAdjacent(from, to)) return 'Move invalid: destination is not adjacent.';
+  }
+
   const destUnit = units.get(toKey);
   if (destUnit && destUnit.player === unit.player) return 'Move invalid: destination occupied by your own unit.';
 
@@ -445,14 +499,20 @@ function explainMoveFailure(fromKey, toKey) {
 
 function canMove(fromKey, toKey) {
   if (!cellKeys.has(fromKey) || !cellKeys.has(toKey) || fromKey === toKey) return false;
-  const from = getCellByKey(fromKey);
-  const to = getCellByKey(toKey);
-  if (!isAdjacent(from, to)) return false;
 
   const unit = units.get(fromKey);
   const destinationUnit = units.get(toKey);
   if (!unit || unit.player !== currentPlayer || unit.movesLeft <= 0) return false;
   if (destinationUnit && destinationUnit.player === unit.player) return false;
+
+  if (isCavalry(unit.type)) {
+    const targets = getCavalryDestinations(fromKey, unit);
+    if (!targets.has(toKey)) return false;
+  } else {
+    const from = getCellByKey(fromKey);
+    const to = getCellByKey(toKey);
+    if (!isAdjacent(from, to)) return false;
+  }
 
   if (destinationUnit && destinationUnit.player !== unit.player) {
     if (['spearman', 'pikeman', 'lancer'].includes(unit.type) && isTileClosedFor(unit.player, toKey)) return false;
@@ -462,6 +522,9 @@ function canMove(fromKey, toKey) {
 }
 
 function getTargets(fromKey) {
+  const unit = units.get(fromKey);
+  if (!unit) return [];
+  if (isCavalry(unit.type)) return [...getCavalryDestinations(fromKey, unit)];
   return cells.map(keyOf).filter((toKey) => canMove(fromKey, toKey));
 }
 
@@ -475,11 +538,13 @@ function moveUnit(fromKey, toKey) {
   const destTile = getTile(toKey);
   if (!unit || !destTile) return;
 
+  const nextMoves = isCavalry(unit.type) ? 0 : unit.movesLeft - 1;
+
   if (!isActionSustainable(currentPlayer, (tSnap, uSnap) => {
     const srcUnit = uSnap.get(fromKey);
     if (!srcUnit) return;
     uSnap.delete(fromKey);
-    uSnap.set(toKey, { ...srcUnit, movesLeft: srcUnit.movesLeft - 1 });
+    uSnap.set(toKey, { ...srcUnit, movesLeft: nextMoves });
     const t = tSnap.find((x) => keyOf(x) === toKey);
     if (t && !t.owner) t.owner = srcUnit.player;
   })) {
@@ -488,7 +553,7 @@ function moveUnit(fromKey, toKey) {
   }
 
   if (!destTile.owner) destTile.owner = unit.player;
-  unit.movesLeft -= 1;
+  unit.movesLeft = nextMoves;
   units.set(toKey, unit);
   units.delete(fromKey);
   lastDebug = `Move ok: ${unit.type} moved to ${toKey}.`;
@@ -537,7 +602,7 @@ function trainUnitAt(key, unitType) {
     return;
   }
 
-  units.set(key, { player: currentPlayer, type: unitType, movesLeft: movePointsFor(unitType), actionsLeft: 1 });
+  units.set(key, { player: currentPlayer, type: unitType, movesLeft: 0, actionsLeft: 0 });
   lastDebug = `Training ok: ${unitType} at ${key}.`;
   render();
 }
