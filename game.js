@@ -137,19 +137,63 @@ const upgradePaths = {
 };
 
 const symbolSets = {
-  forest: ['🌲', '🌳', '🦌', '🍄'], pasture: ['🐄', '🐑', '🐐', '🐎'], farm: ['🌾', '🌽', '🌱', '🌿'],
-  homestead: ['🌲', '🥕', '🐐', '🏚️', '🍄', '🐓'], village: ['🏡', '🐔', '🥬', '⛪', '🏫', '🐖'],
-  town: ['🏘️', '🥖', '🍻', '🏤', '🕍', '🐖'], city: ['🏙️', '🥐', '🍷', '🏥', '🏫', '⛪'],
-  manor: ['🏛️', '⚜️', '♦️', '🌸', '⚜️', '♦️'], estate: ['🏦', '♦️', '⚜️', '♦️', '⚜️', '♦️'], palace: ['🏟️', '👑', '⚜️', '👑', '⚜️', '👑'],
-  outpost: ['🗼', '🛡️', '🗼', '🛡️', '🗼', '🛡️'], stronghold: ['🧱', '🗼', '🛡️', '🧱', '🗼', '🛡️'], keep: ['🏰', '🗼', '🧱', '🛡️', '🧱', '🛡️'],
+  manor: ['🏛️', '⚜️', '♦️', '🌸', '⚜️', '♦️'],
+  estate: ['🏦', '♦️', '⚜️', '♦️', '⚜️', '♦️'],
+  palace: ['🏟️', '👑', '⚜️', '👑', '⚜️', '👑'],
+  outpost: ['🗼', '🛡️', '🗼', '🛡️', '🗼', '🛡️'],
+  stronghold: ['🧱', '🗼', '🛡️', '🧱', '🗼', '🛡️'],
+  keep: ['🏰', '🗼', '🧱', '🛡️', '🧱', '🛡️'],
 };
+
+const trees = ['🌲', '🌳', '🎄'];
+const pastureAnimals = ['🐄', '🐑', '🐐', '🐎'];
+const farmCrops = ['🌾', '🌽', '🌱', '🌿'];
+const houses = ['🏠', '🏡'];
+const community = ['⛪', '🏫', '🏥', '🏤', '🕍'];
+const settlementAnimals = ['🐖', '🐓', '🦆', '🐔'];
+const settlementVeg = ['🥕', '🥦', '🧄', '🥬', '🍅'];
+const homesteadAnimals = ['🦌', '🐗', '🐇', '🦃'];
+const homesteadVeg = ['🍄', '🥔', ...settlementVeg];
 
 const resourceKeys = ['crops', 'wood', 'livestock', 'provisions', 'supplies', 'crafts', 'luxury', 'support', 'authority', 'sovereignty'];
 
 function keyOf(cell) { return `${cell.q},${cell.r}`; }
 function randomType() { return weightedTypes[Math.floor(Math.random() * weightedTypes.length)]; }
 function ownerColor(player) { return player === 'blue' ? '#3b82f6' : player === 'red' ? '#ef4444' : null; }
-function pickSymbol(type) { const set = symbolSets[type] || ['⬜']; return set[Math.floor(Math.random() * set.length)]; }
+function pick(arr) { return arr[Math.floor(Math.random() * arr.length)]; }
+
+function buildSymbols(type) {
+  if (type === 'forest') return Array.from({ length: 6 }, () => pick([...trees, '🦌']));
+  if (type === 'pasture') return Array.from({ length: 6 }, () => pick(pastureAnimals));
+  if (type === 'farm') return Array.from({ length: 6 }, () => pick(farmCrops));
+
+  if (type === 'homestead') {
+    // meaningful composition: exactly one tree, one veg, one animal, one house
+    const base = [pick(trees), pick(homesteadVeg), pick(homesteadAnimals), pick(houses)];
+    const filler = [pick([...homesteadVeg, ...homesteadAnimals]), pick([...homesteadVeg, ...homesteadAnimals])];
+    return [...base, ...filler];
+  }
+
+  if (type === 'village') {
+    // exactly 2 houses
+    const out = [pick(houses), pick(houses), pick(settlementVeg), pick(settlementAnimals), pick(community), pick([...settlementVeg, ...settlementAnimals, ...community])];
+    return out.sort(() => Math.random() - 0.5);
+  }
+
+  if (type === 'town') {
+    // exactly 3 houses
+    const out = [pick(houses), pick(houses), pick(houses), pick(settlementAnimals), pick(community), pick([...settlementAnimals, ...community])];
+    return out.sort(() => Math.random() - 0.5);
+  }
+
+  if (type === 'city') {
+    // exactly 4 houses
+    const out = [pick(houses), pick(houses), pick(houses), pick(houses), pick(community), pick(community)];
+    return out.sort(() => Math.random() - 0.5);
+  }
+
+  return symbolSets[type] ? [...symbolSets[type]] : ['⬜', '⬜', '⬜', '⬜', '⬜', '⬜'];
+}
 
 function buildRadiusCells(radius) {
   const result = [];
@@ -175,6 +219,13 @@ function polygonPoints(center, radius, angleDeg = -30) {
   }).join(' ');
 }
 
+function polygonVertices(center, radius, angleDeg = -30) {
+  return Array.from({ length: 6 }, (_, i) => {
+    const angle = (Math.PI / 180) * (60 * i + angleDeg);
+    return [center.x + radius * Math.cos(angle), center.y + radius * Math.sin(angle)];
+  });
+}
+
 function cubeDistance(a, b) {
   const aq = a.q; const ar = a.r; const as = -aq - ar;
   const bq = b.q; const br = b.r; const bs = -bq - br;
@@ -185,7 +236,7 @@ const cells = buildRadiusCells(MAP_RADIUS);
 const cellKeys = new Set(cells.map(keyOf));
 const tiles = cells.map((cell) => {
   const type = randomType();
-  return { ...cell, type, owner: null, symbols: Array.from({ length: 6 }, () => pickSymbol(type)) };
+  return { ...cell, type, owner: null, symbols: buildSymbols(type) };
 });
 const units = new Map();
 
@@ -194,7 +245,7 @@ function placeStart(q, r, player) {
   if (!tile) return;
   tile.type = 'homestead';
   tile.owner = player;
-  tile.symbols = Array.from({ length: 6 }, () => pickSymbol('homestead'));
+  tile.symbols = buildSymbols('homestead');
   units.set(`${q},${r}`, { player, type: 'axman', movesLeft: 1, actionsLeft: 1 });
 }
 placeStart(-MAP_RADIUS, MAP_RADIUS, 'blue');
@@ -398,7 +449,7 @@ function upgradeSelectedTile(toType) {
 
   unit.actionsLeft -= 1;
   tile.type = toType;
-  tile.symbols = Array.from({ length: 6 }, () => pickSymbol(toType));
+  tile.symbols = buildSymbols(toType);
   lastDebug = `Upgrade ok: ${selectedKey} -> ${toType}.`;
   render();
 }
@@ -559,6 +610,7 @@ function render(logs = []) {
   }
 
   const tileCenters = tiles.map((tile) => ({ tile, pos: axialToPixel(tile) }));
+  const tileMap = new Map(tiles.map((t) => [keyOf(t), t]));
 
   // Dominant-bleed mosaic with map-edge cutoff: skip mini hexes too far from any map tile center.
   const mosaicGroup = document.createElementNS('http://www.w3.org/2000/svg', 'g');
@@ -608,6 +660,26 @@ function render(logs = []) {
       outline.setAttribute('fill', 'none');
       outline.dataset.key = key;
       board.appendChild(outline);
+    }
+
+    if (tile.owner) {
+      const verts = polygonVertices(pos, HEX_RADIUS);
+      DIRECTIONS.forEach(([dq, dr], i) => {
+        const neighbor = tileMap.get(`${tile.q + dq},${tile.r + dr}`);
+        if (neighbor?.owner === tile.owner) return;
+        const [x1, y1] = verts[i];
+        const [x2, y2] = verts[(i + 1) % 6];
+        const edge = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+        edge.setAttribute('x1', String(x1));
+        edge.setAttribute('y1', String(y1));
+        edge.setAttribute('x2', String(x2));
+        edge.setAttribute('y2', String(y2));
+        edge.setAttribute('stroke', ownerColor(tile.owner));
+        edge.setAttribute('stroke-width', '3');
+        edge.setAttribute('stroke-linecap', 'round');
+        edge.setAttribute('pointer-events', 'none');
+        board.appendChild(edge);
+      });
     }
 
     tile.symbols.forEach((symbol, i) => {
