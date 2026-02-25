@@ -61,7 +61,7 @@ const UNIT_DEFS = {
   axman: { emoji: '🪓', cls: 'defworker', terrainUpgrader: true },
   laborer: { emoji: '♠️', cls: 'worker', terrainUpgrader: true },
   architect: { emoji: '🧱', cls: 'worker', terrainUpgrader: true },
-  rangehand: { emoji: '🪃', cls: 'defworker', terrainUpgrader: true },
+  rangehand: { emoji: '🪃', cls: 'archer', terrainUpgrader: false },
   surveyor: { emoji: '📐', cls: 'defworker', terrainUpgrader: true },
   constable: { emoji: '🪪', cls: 'defworker', terrainUpgrader: true },
 
@@ -70,11 +70,11 @@ const UNIT_DEFS = {
   pikeman: { emoji: 'spear', cls: 'infantry', terrainUpgrader: false },
   infantry_sergeant: { emoji: '🛡️', cls: 'infantry', terrainUpgrader: false },
 
-  hunter: { emoji: '🏹', cls: 'archer', terrainUpgrader: true },
-  longbow: { emoji: '🏹', cls: 'archer', terrainUpgrader: true },
-  crossbow: { emoji: '🏹', cls: 'archer', terrainUpgrader: true },
-  barrage_captain: { emoji: '🎖️', cls: 'archer', terrainUpgrader: true },
-  slinger: { emoji: '🪃', cls: 'defworker', terrainUpgrader: true }, // alias of rangehand
+  hunter: { emoji: '🏹', cls: 'archer', terrainUpgrader: false },
+  longbow: { emoji: '🏹', cls: 'archer', terrainUpgrader: false },
+  crossbow: { emoji: '🏹', cls: 'archer', terrainUpgrader: false },
+  barrage_captain: { emoji: '🎖️', cls: 'archer', terrainUpgrader: false },
+  slinger: { emoji: '🪃', cls: 'archer', terrainUpgrader: false }, // alias of rangehand
 
   horseman: { emoji: '🐎', cls: 'cavalry', terrainUpgrader: false },
   lancer: { emoji: '🗡️', cls: 'cavalry', terrainUpgrader: false },
@@ -160,7 +160,7 @@ const settlementVeg = ['🥕', '🥦', '🧄', '🥬', '🍅'];
 const homesteadAnimals = ['🦌', '🐗', '🐇', '🦃'];
 const homesteadVeg = ['🍄', '🥔', ...settlementVeg];
 
-const resourceKeys = ['crops', 'wood', 'livestock', 'provisions', 'supplies', 'crafts', 'luxury', 'support', 'authority', 'sovereignty'];
+const resourceKeys = ['wood', 'livestock', 'crops', 'provisions', 'supplies', 'crafts', 'luxury', 'support', 'authority', 'sovereignty'];
 
 const resourceEmoji = {
   crops: '🌾', wood: '🪵', livestock: '🐑', provisions: '🥕', supplies: '📦',
@@ -322,6 +322,32 @@ function canSupportTileUpgrade(player, fromType, toType) {
     const prior = fromNeed[res] || 0;
     const afterUse = used[res] - prior + amt;
     if (produced[res] < afterUse) return false;
+  }
+  return true;
+}
+
+function canClaimUpkeepTileNow(player, tileType, tileSnapshot = tiles, unitSnapshot = units) {
+  const need = structureUpkeep[tileType] || {};
+  const eco = computeEconomy(player, tileSnapshot, unitSnapshot);
+  for (const [res, amt] of Object.entries(need)) {
+    if ((eco.available[res] || 0) < amt) return false;
+  }
+  return true;
+}
+
+function canSupportUnitUpgrade(player, fromType, toType, key) {
+  const eco = computeEconomy(player);
+  const tile = getTile(key);
+  const fromUpkeep = unitUpkeep[fromType] || {};
+  const toUpkeep = unitUpkeep[toType] || {};
+
+  // If upgraded unit will be free on this tile, always supportable.
+  if (tile && freeUnitCondition[toType]?.(tile)) return true;
+
+  for (const [res, toAmt] of Object.entries(toUpkeep)) {
+    const fromAmt = freeUnitCondition[fromType]?.(tile) ? 0 : (fromUpkeep[res] || 0);
+    const afterUse = eco.used[res] - fromAmt + toAmt;
+    if (eco.produced[res] < afterUse) return false;
   }
   return true;
 }
@@ -541,11 +567,79 @@ function canMove(fromKey, toKey) {
   return true;
 }
 
-function getTargets(fromKey) {
+function isArcher(unitType) {
+  return UNIT_DEFS[unitType]?.cls === 'archer';
+}
+
+function archerRange(unitType) {
+  return ['longbow', 'barrage_captain'].includes(unitType) ? 2 : 1;
+}
+
+function canRangedAttack(fromKey, toKey) {
+  if (!cellKeys.has(fromKey) || !cellKeys.has(toKey) || fromKey === toKey) return false;
+  const attacker = units.get(fromKey);
+  const target = units.get(toKey);
+  if (!attacker || !target) return false;
+  if (attacker.player !== currentPlayer || target.player === currentPlayer) return false;
+  if (!isArcher(attacker.type) || attacker.actionsLeft <= 0) return false;
+  if (!canUseLongWeaponFrom(fromKey, attacker.type)) return false;
+
+  // Rangehand/slinger can only shoot first, then move.
+  if (['rangehand', 'slinger'].includes(attacker.type) && attacker.movesLeft < movePointsFor(attacker.type)) return false;
+
+  const from = getCellByKey(fromKey);
+  const to = getCellByKey(toKey);
+  const dist = cubeDistance(from, to);
+  return dist >= 1 && dist <= archerRange(attacker.type);
+}
+
+function getAttackTargets(fromKey) {
+  return cells.map(keyOf).filter((toKey) => canRangedAttack(fromKey, toKey));
+}
+
+function explainAttackFailure(fromKey, toKey) {
+  const attacker = units.get(fromKey);
+  const target = units.get(toKey);
+  if (!attacker) return 'Attack invalid: no selected unit.';
+  if (!isArcher(attacker.type)) return `Attack invalid: ${attacker.type} is not an archer.`;
+  if (attacker.player !== currentPlayer) return `Attack invalid: it is ${currentPlayer}'s turn.`;
+  if (attacker.actionsLeft <= 0) return 'Attack invalid: unit has no actions left.';
+  if (!target) return 'Attack invalid: no enemy unit on target tile.';
+  if (target.player === currentPlayer) return 'Attack invalid: cannot target your own unit.';
+  if (!canUseLongWeaponFrom(fromKey, attacker.type)) return `Attack invalid: ${attacker.type} cannot fire from closed terrain.`;
+  if (['rangehand', 'slinger'].includes(attacker.type) && attacker.movesLeft < movePointsFor(attacker.type)) return `Attack invalid: ${attacker.type} must shoot before moving.`;
+  const from = getCellByKey(fromKey);
+  const to = getCellByKey(toKey);
+  const dist = cubeDistance(from, to);
+  const range = archerRange(attacker.type);
+  return `Attack invalid: target is out of range (distance ${dist}, range ${range}).`;
+}
+
+function rangedAttack(fromKey, toKey) {
+  if (!canRangedAttack(fromKey, toKey)) {
+    lastDebug = explainAttackFailure(fromKey, toKey);
+    return false;
+  }
+  const attacker = units.get(fromKey);
+  const target = units.get(toKey);
+  if (!attacker || !target) return false;
+  units.delete(toKey);
+  attacker.actionsLeft -= 1;
+  lastDebug = `Attack ok: ${attacker.type} shot ${target.type} at ${toKey}.`;
+  return true;
+}
+
+function getMoveTargets(fromKey) {
   const unit = units.get(fromKey);
   if (!unit) return [];
   if (isCavalry(unit.type)) return [...getCavalryDestinations(fromKey, unit)];
   return cells.map(keyOf).filter((toKey) => canMove(fromKey, toKey));
+}
+
+function getTargets(fromKey) {
+  const moveTargets = getMoveTargets(fromKey);
+  const attackTargets = getAttackTargets(fromKey);
+  return [...new Set([...moveTargets, ...attackTargets])];
 }
 
 
@@ -561,9 +655,16 @@ function moveEconomyWarning(fromKey, toKey, nextMoves) {
   const t = tSnap.find((x) => keyOf(x) === toKey);
   if (t) {
     const beforeOwner = t.owner;
-    if (beforeOwner === currentPlayer || beforeOwner == null) {
+    const upkeepRequired = Boolean(structureUpkeep[t.type]);
+    if (beforeOwner === currentPlayer) {
+      t.owner = currentPlayer;
+    } else if (!upkeepRequired) {
+      // Resource tiles/homestead can always be claimed.
+      t.owner = currentPlayer;
+    } else if (canClaimUpkeepTileNow(currentPlayer, t.type, tSnap, uSnap)) {
       t.owner = currentPlayer;
     } else {
+      // Not enough stream to maintain this newly captured upkeep-bearing tile.
       t.owner = null;
     }
   }
@@ -593,26 +694,21 @@ function moveUnit(fromKey, toKey) {
   units.delete(fromKey);
 
   let claimText = '';
+  const upkeepRequired = Boolean(structureUpkeep[destTile.type]);
   if (priorOwner === currentPlayer) {
     claimText = 'holding friendly territory';
-  } else if (priorOwner === null) {
+  } else if (!upkeepRequired) {
+    // Resource tiles (including homestead) are always claimable.
     destTile.owner = currentPlayer;
-    if (economyDeficits(currentPlayer).length > 0) {
-      // Optional claim fallback for risky land.
-      destTile.owner = null;
-      claimText = 'stood on neutral tile without claiming (would create shortage)';
-    } else {
-      claimText = 'claimed neutral tile';
-    }
+    claimText = priorOwner ? `captured ${priorOwner} territory` : 'claimed neutral tile';
+  } else if (canClaimUpkeepTileNow(currentPlayer, destTile.type)) {
+    destTile.owner = currentPlayer;
+    claimText = priorOwner ? `captured ${priorOwner} territory` : 'claimed neutral tile';
   } else {
-    // Stepping onto enemy territory captures it unless that would cause shortage; then neutralize it.
-    destTile.owner = currentPlayer;
-    if (economyDeficits(currentPlayer).length > 0) {
-      destTile.owner = null;
-      claimText = `contested enemy tile and left it neutral (claim would create shortage)`;
-    } else {
-      claimText = `captured ${priorOwner} territory`;
-    }
+    destTile.owner = null;
+    claimText = priorOwner
+      ? `contested enemy tile and left it neutral (insufficient ${destTile.type} upkeep stream)`
+      : 'stood on neutral tile without claiming (insufficient upkeep stream)';
   }
 
   lastDebug = `Move ok: ${unit.type} moved to ${toKey}, ${claimText}. ${warning}`.trim();
@@ -666,13 +762,8 @@ function upgradeUnitAt(key, newType) {
   const unit = units.get(key);
   if (!tile || !unit || unit.player !== currentPlayer || unit.actionsLeft <= 0) return;
 
-  if (!isActionSustainable(currentPlayer, (_tSnap, uSnap) => {
-    const u = uSnap.get(key);
-    if (!u) return;
-    u.type = newType;
-    u.actionsLeft -= 1;
-  })) {
-    lastDebug = `Unit upgrade blocked: ${newType} would create shortage for ${currentPlayer}.`;
+  if (!canSupportUnitUpgrade(currentPlayer, unit.type, newType, key)) {
+    lastDebug = `Unit upgrade blocked: ${newType} upkeep is not currently supportable.`;
     return;
   }
 
@@ -757,7 +848,7 @@ function renderStatus(logs = []) {
     statusText.textContent = `${currentPlayer.toUpperCase()} turn. Tile selected. ${lastDebug || ''}`;
     return;
   }
-  statusText.textContent = `${unit.player.toUpperCase()} ${unit.type} selected. ${getTargets(selectedKey).length} legal moves. M:${unit.movesLeft} A:${unit.actionsLeft}. ${lastDebug || ''}`;
+  statusText.textContent = `${unit.player.toUpperCase()} ${unit.type} selected. ${getMoveTargets(selectedKey).length} moves, ${getAttackTargets(selectedKey).length} shots. M:${unit.movesLeft} A:${unit.actionsLeft}. ${lastDebug || ''}`;
 }
 
 function renderSpearmanGlyph(pos) {
@@ -971,8 +1062,19 @@ board.addEventListener('click', (event) => {
     return;
   }
 
-  if (selectedKey && !canMove(selectedKey, key) && units.get(selectedKey)) {
-    lastDebug = explainMoveFailure(selectedKey, key);
+  if (selectedKey && canRangedAttack(selectedKey, key)) {
+    rangedAttack(selectedKey, key);
+    render();
+    return;
+  }
+
+  if (selectedKey && units.get(selectedKey)) {
+    const selectedUnit = units.get(selectedKey);
+    if (selectedUnit && isArcher(selectedUnit.type) && units.get(key)) {
+      lastDebug = explainAttackFailure(selectedKey, key);
+    } else if (!canMove(selectedKey, key)) {
+      lastDebug = explainMoveFailure(selectedKey, key);
+    }
   }
 
   selectedKey = (clickedUnit || getTile(key)) ? key : null;
