@@ -15,7 +15,19 @@ const ORIGIN = { x: 980, y: 860 };
 const DIRECTIONS = [[1, 0], [1, -1], [0, -1], [-1, 0], [-1, 1], [0, 1]];
 const MAP_RADIUS = 6; // 127 tiles
 const SOLO_START_RADIUS = 2; // 19 tiles
+<<<<<<< codex/create-simple-browser-based-hex-game-demo-qz5pi8
+const MOSAIC_PRESETS = [
+  { name: 'Solid', miniRadius: null },
+  { name: 'Coarse', miniRadius: 14 },
+  { name: 'Balanced', miniRadius: 10 },
+  { name: 'Medium', miniRadius: 8 },
+  { name: 'Fine', miniRadius: 6 },
+  { name: 'Ultra', miniRadius: 4.5 },
+];
+let mosaicResolution = 3;
+=======
 let mosaicResolution = 50;
+>>>>>>> main
 
 const weightedTypes = [
   ...Array(64).fill('forest'),
@@ -1361,7 +1373,12 @@ function render(logs = []) {
   const edgeCutoff = (HEX_RADIUS * 1.2) ** 2;
   const fadeEnd = edgeCutoff * 1.18;
 
+<<<<<<< codex/create-simple-browser-based-hex-game-demo-qz5pi8
+  const preset = MOSAIC_PRESETS[mosaicResolution] || MOSAIC_PRESETS[3];
+  if (!preset.miniRadius) {
+=======
   if (mosaicResolution <= 1) {
+>>>>>>> main
     for (const tc of tileCenters) {
       const solidPoly = document.createElementNS('http://www.w3.org/2000/svg', 'polygon');
       solidPoly.setAttribute('points', polygonPoints(tc.pos, HEX_RADIUS));
@@ -1370,7 +1387,11 @@ function render(logs = []) {
       mosaicGroup.appendChild(solidPoly);
     }
   } else {
+<<<<<<< codex/create-simple-browser-based-hex-game-demo-qz5pi8
+    const miniRadius = preset.miniRadius;
+=======
     const miniRadius = Math.max(2.8, HEX_RADIUS / (1 + mosaicResolution * 0.06));
+>>>>>>> main
     const gridRange = Math.ceil((MAP_RADIUS + 2) * (HEX_RADIUS / miniRadius) * 2.7);
     const globalMini = [];
     for (let mq = -gridRange; mq <= gridRange; mq += 1) {
@@ -1626,10 +1647,18 @@ endTurnBtn.addEventListener('click', () => {
 start1pBtn?.addEventListener('click', () => startGame('solo'));
 start2pBtn?.addEventListener('click', () => startGame('duo'));
 
+<<<<<<< codex/create-simple-browser-based-hex-game-demo-qz5pi8
+if (mosaicResolutionValueEl) mosaicResolutionValueEl.textContent = MOSAIC_PRESETS[mosaicResolution]?.name || 'Medium';
+mosaicResolutionEl?.addEventListener('input', () => {
+  const next = Number(mosaicResolutionEl.value);
+  mosaicResolution = Number.isFinite(next) ? Math.max(0, Math.min(MOSAIC_PRESETS.length - 1, Math.round(next))) : 3;
+  if (mosaicResolutionValueEl) mosaicResolutionValueEl.textContent = MOSAIC_PRESETS[mosaicResolution]?.name || 'Medium';
+=======
 if (mosaicResolutionValueEl) mosaicResolutionValueEl.textContent = String(mosaicResolution);
 mosaicResolutionEl?.addEventListener('input', () => {
   mosaicResolution = Number(mosaicResolutionEl.value) || 1;
   if (mosaicResolutionValueEl) mosaicResolutionValueEl.textContent = String(mosaicResolution);
+>>>>>>> main
   render();
 });
 
