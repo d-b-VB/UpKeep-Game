@@ -15,6 +15,31 @@ body {
   overflow: hidden;
 }
 
+.mode-menu {
+  position: fixed;
+  inset: 0;
+  background: rgba(3, 6, 16, 0.78);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 20;
+}
+
+.mode-menu.hidden { display: none; }
+
+.mode-card {
+  width: min(560px, calc(100vw - 24px));
+  background: rgba(13, 19, 37, 0.95);
+  border: 1px solid rgba(255, 255, 255, 0.25);
+  border-radius: 14px;
+  padding: 18px;
+  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.5);
+}
+
+.mode-card h2 { margin: 0 0 8px; }
+.mode-card p { margin: 0; color: #cad6ff; line-height: 1.35; }
+.mode-actions { margin-top: 14px; display: flex; gap: 8px; }
+
 .game-shell {
   width: 100vw;
   height: 100vh;

@@ -3,12 +3,16 @@ const statusText = document.getElementById('status');
 const resourcesEl = document.getElementById('resources');
 const selectionEl = document.getElementById('selection');
 const endTurnBtn = document.getElementById('end-turn');
+const modeMenuEl = document.getElementById('mode-menu');
+const start1pBtn = document.getElementById('start-1p');
+const start2pBtn = document.getElementById('start-2p');
 
 const HEX_RADIUS = 42;
 const MINI_RADIUS = 8;
 const ORIGIN = { x: 980, y: 860 };
 const DIRECTIONS = [[1, 0], [1, -1], [0, -1], [-1, 0], [-1, 1], [0, 1]];
 const MAP_RADIUS = 6; // 127 tiles
+const SOLO_START_RADIUS = 2; // 19 tiles
 
 const weightedTypes = [
   ...Array(64).fill('forest'),
@@ -351,24 +355,93 @@ function cubeDistance(a, b) {
   return Math.max(Math.abs(aq - bq), Math.abs(ar - br), Math.abs(as - bs));
 }
 
-const cells = buildRadiusCells(MAP_RADIUS);
-const cellKeys = new Set(cells.map(keyOf));
-const tiles = cells.map((cell) => {
+let cells = [];
+let cellKeys = new Set();
+let tiles = [];
+let units = new Map();
+let gameMode = null; // 'solo' | 'duo'
+
+function makeTile(cell) {
   const type = randomType();
   return { ...cell, type, owner: null, symbols: buildSymbols(type) };
-});
-const units = new Map();
+}
 
-function placeStart(q, r, player) {
-  const tile = tiles.find((t) => t.q === q && t.r === r);
+function addCellTile(cell) {
+  const key = keyOf(cell);
+  if (cellKeys.has(key)) return;
+  cells.push(cell);
+  cellKeys.add(key);
+  tiles.push(makeTile(cell));
+}
+
+function withinFiniteMap(cell) {
+  return cubeDistance({ q: 0, r: 0 }, cell) <= MAP_RADIUS;
+}
+
+function ensureTile(q, r) {
+  const cell = { q, r };
+  if (gameMode === 'duo' && !withinFiniteMap(cell)) return null;
+  addCellTile(cell);
+  return getTile(`${q},${r}`);
+}
+
+function placeStart(q, r, player, type = 'axman') {
+  const tile = ensureTile(q, r);
   if (!tile) return;
   tile.type = 'homestead';
   tile.owner = player;
   tile.symbols = buildSymbols('homestead');
-  units.set(`${q},${r}`, { player, type: 'axman', movesLeft: 1, actionsLeft: 1 });
+  units.set(`${q},${r}`, { player, type, movesLeft: movePointsFor(type), actionsLeft: actionPointsFor(type) });
 }
-placeStart(-MAP_RADIUS, MAP_RADIUS, 'blue');
-placeStart(MAP_RADIUS, -MAP_RADIUS, 'red');
+
+function setupDuoGame() {
+  cells = buildRadiusCells(MAP_RADIUS);
+  cellKeys = new Set(cells.map(keyOf));
+  tiles = cells.map((cell) => makeTile(cell));
+  units = new Map();
+  placeStart(-MAP_RADIUS, MAP_RADIUS, 'blue');
+  placeStart(MAP_RADIUS, -MAP_RADIUS, 'red');
+  resetTurnActions('blue');
+  resetTurnActions('red');
+}
+
+function revealSoloTiles() {
+  if (gameMode !== 'solo') return;
+  const unitsNow = [...units.entries()].filter(([, u]) => u.player === 'blue');
+  for (const [key, unit] of unitsNow) {
+    const from = getCellByKey(key);
+    const movement = movePointsFor(unit.type);
+    const range = isArcher(unit.type) ? archerRange(unit.type) : 1;
+    const interactRadius = Math.max(1, movement + range);
+    for (let dq = -interactRadius; dq <= interactRadius; dq += 1) {
+      for (let dr = Math.max(-interactRadius, -dq - interactRadius); dr <= Math.min(interactRadius, -dq + interactRadius); dr += 1) {
+        ensureTile(from.q + dq, from.r + dr);
+      }
+    }
+  }
+}
+
+function setupSoloGame() {
+  cells = buildRadiusCells(SOLO_START_RADIUS);
+  cellKeys = new Set(cells.map(keyOf));
+  tiles = cells.map((cell) => makeTile(cell));
+  units = new Map();
+  placeStart(0, 0, 'blue');
+  resetTurnActions('blue');
+  revealSoloTiles();
+}
+
+function startGame(mode) {
+  gameMode = mode;
+  currentPlayer = 'blue';
+  selectedKey = null;
+  lastDebug = mode === 'solo' ? 'Solo mode: new tiles reveal as units approach them.' : '';
+  resourceFocus = null;
+  resourceHover = null;
+  if (mode === 'solo') setupSoloGame(); else setupDuoGame();
+  modeMenuEl.classList.add('hidden');
+  render();
+}
 
 let currentPlayer = 'blue';
 let selectedKey = null;
@@ -832,7 +905,7 @@ function getMoveTargets(fromKey) {
   if (!unit) return [];
   if (unit.type === 'surveyor') return [...getSurveyorReach(fromKey, unit).destinations];
   if (isCavalry(unit.type)) return [...getCavalryDestinations(fromKey, unit)];
-  return cells.map(keyOf).filter((toKey) => canMove(fromKey, toKey));
+  return tiles.map(keyOf).filter((toKey) => canMove(fromKey, toKey));
 }
 
 function getTargets(fromKey) {
@@ -936,6 +1009,7 @@ function moveUnit(fromKey, toKey) {
   }
 
   lastDebug = `Move ok: ${unit.type} moved to ${toKey}, ${claimText}. ${warning}`.trim();
+  revealSoloTiles();
 }
 
 function upgradeSelectedTile(toType) {
@@ -1046,6 +1120,12 @@ function renderResources() {
       render();
     });
   });
+
+  resourcesEl.addEventListener('mouseleave', () => {
+    if (!resourceHover) return;
+    resourceHover = null;
+    render();
+  }, { once: true });
 }
 
 
@@ -1251,6 +1331,10 @@ function renderUnitGlyph(unit, pos, group) {
 }
 
 function render(logs = []) {
+  if (resourceHover) {
+    const hoveredCell = document.querySelector('[data-resource-hover]:hover');
+    if (!hoveredCell) resourceHover = null;
+  }
   board.innerHTML = '';
   const targets = selectedKey ? new Set(getTargets(selectedKey)) : new Set();
   const activeFocus = resourceHover || resourceFocus;
@@ -1510,14 +1594,17 @@ board.addEventListener('click', (event) => {
 });
 
 endTurnBtn.addEventListener('click', () => {
-  const logs = [...enforceShortages('blue'), ...enforceShortages('red')];
-  currentPlayer = currentPlayer === 'blue' ? 'red' : 'blue';
+  const logs = gameMode === 'solo'
+    ? [...enforceShortages('blue')]
+    : [...enforceShortages('blue'), ...enforceShortages('red')];
+  currentPlayer = gameMode === 'solo' ? 'blue' : (currentPlayer === 'blue' ? 'red' : 'blue');
   resetTurnActions(currentPlayer);
+  revealSoloTiles();
   selectedKey = null;
   lastDebug = 'Turn advanced. Economy table reflects continuous produced/used/available flow.';
   render(logs);
 });
 
-resetTurnActions('blue');
-resetTurnActions('red');
+start1pBtn?.addEventListener('click', () => startGame('solo'));
+start2pBtn?.addEventListener('click', () => startGame('duo'));
 render();
