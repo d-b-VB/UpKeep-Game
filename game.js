@@ -1403,33 +1403,40 @@ function render(logs = []) {
     }
 
     for (const mini of globalMini) {
-      const candidates = [];
-      let minDist = Infinity;
       const nearTiles = [];
+      let minDist = Infinity;
       for (const tc of tileCenters) {
         const dx = tc.pos.x - mini.pos.x;
         const dy = tc.pos.y - mini.pos.y;
         const d2 = dx * dx + dy * dy;
         if (d2 < minDist) minDist = d2;
-        if (d2 <= fadeEnd) {
-          nearTiles.push(tc);
-          const color = colorForTileShard(tc.tile, mini.idx);
-          candidates.push({ color, weight: 1 / (Math.sqrt(d2) + 1) });
-        }
+        if (d2 <= fadeEnd) nearTiles.push(tc);
       }
-      if (!candidates.length || minDist > fadeEnd) continue;
+      if (!nearTiles.length || minDist > fadeEnd) continue;
 
+      // Blend only where this mini-hex truly overlaps more than one parent tile.
       const samplePts = [[mini.pos.x, mini.pos.y], ...polygonVertices(mini.pos, miniRadius)];
-      let insideCount = 0;
+      const overlapCounts = new Map();
+      let insideAnyCount = 0;
+
       for (const [sx, sy] of samplePts) {
-        let insideAny = false;
+        let matched = false;
         for (const tc of nearTiles) {
-          if (pointInPolygon(sx, sy, tc.poly)) { insideAny = true; break; }
+          if (!pointInPolygon(sx, sy, tc.poly)) continue;
+          overlapCounts.set(tc, (overlapCounts.get(tc) || 0) + 1);
+          matched = true;
         }
-        if (insideAny) insideCount += 1;
+        if (matched) insideAnyCount += 1;
       }
-      const insideRatio = insideCount / samplePts.length;
-      const overhang = Math.max(0, 1 - insideRatio);
+
+      if (!overlapCounts.size) continue;
+
+      const candidates = [];
+      for (const [tc, count] of overlapCounts.entries()) {
+        candidates.push({ color: colorForTileShard(tc.tile, mini.idx), weight: count });
+      }
+
+      const overhang = Math.max(0, 1 - (insideAnyCount / samplePts.length));
       if (overhang > 0) {
         const bgWeight = 0.45 * (overhang ** 1.5);
         candidates.push({ color: '#0b1230', weight: bgWeight });
