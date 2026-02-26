@@ -1414,27 +1414,33 @@ function render(logs = []) {
       }
       if (!nearTiles.length || minDist > fadeEnd) continue;
 
-      // Blend only where this mini-hex truly overlaps more than one parent tile.
-      const samplePts = [[mini.pos.x, mini.pos.y], ...polygonVertices(mini.pos, miniRadius)];
-      const overlapCounts = new Map();
-      let insideAnyCount = 0;
+      const centerHits = nearTiles.filter((tc) => pointInPolygon(mini.pos.x, mini.pos.y, tc.poly));
+      const primaryTile = centerHits[0] || null;
+      if (!primaryTile) continue;
+
+      // Keep interiors pure (single parent tile color). Blend only at true cross-tile overlap.
+      const samplePts = polygonVertices(mini.pos, miniRadius);
+      const overlapCounts = new Map([[primaryTile, samplePts.length]]);
+      let insideAnyCount = samplePts.length;
 
       for (const [sx, sy] of samplePts) {
-        let matched = false;
-        for (const tc of nearTiles) {
-          if (!pointInPolygon(sx, sy, tc.poly)) continue;
-          overlapCounts.set(tc, (overlapCounts.get(tc) || 0) + 1);
-          matched = true;
+        const hits = nearTiles.filter((tc) => pointInPolygon(sx, sy, tc.poly));
+        if (!hits.length) {
+          insideAnyCount -= 1;
+          continue;
         }
-        if (matched) insideAnyCount += 1;
+
+        if (hits.some((tc) => tc !== primaryTile)) {
+          overlapCounts.set(primaryTile, Math.max(0, (overlapCounts.get(primaryTile) || 0) - 1));
+          for (const tc of hits) {
+            overlapCounts.set(tc, (overlapCounts.get(tc) || 0) + 1);
+          }
+        }
       }
 
-      if (!overlapCounts.size) continue;
-
-      const candidates = [];
-      for (const [tc, count] of overlapCounts.entries()) {
-        candidates.push({ color: colorForTileShard(tc.tile, mini.idx), weight: count });
-      }
+      const candidates = [...overlapCounts.entries()]
+        .filter(([, count]) => count > 0)
+        .map(([tc, count]) => ({ color: colorForTileShard(tc.tile, mini.idx), weight: count }));
 
       const overhang = Math.max(0, 1 - (insideAnyCount / samplePts.length));
       if (overhang > 0) {
