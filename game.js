@@ -60,9 +60,9 @@ const UNIT_DEFS = {
   worker: { emoji: '🔨', cls: 'worker', terrainUpgrader: true },
   axman: { emoji: '🪓', cls: 'defworker', terrainUpgrader: true },
   laborer: { emoji: '♠️', cls: 'worker', terrainUpgrader: true },
-  architect: { emoji: '🧱', cls: 'worker', terrainUpgrader: true },
+  architect: { emoji: '📐', cls: 'worker', terrainUpgrader: true },
   rangehand: { emoji: '🪃', cls: 'archer', terrainUpgrader: false },
-  surveyor: { emoji: '📐', cls: 'defworker', terrainUpgrader: true },
+  surveyor: { emoji: '🧭', cls: 'defworker', terrainUpgrader: true },
   constable: { emoji: '🪪', cls: 'defworker', terrainUpgrader: true },
 
   spearman: { emoji: 'spear', cls: 'infantry', terrainUpgrader: false },
@@ -101,6 +101,13 @@ const freeUnitCondition = {
 
 function movePointsFor(unitType) {
   if (['horseman', 'lancer', 'cavalry_archer', 'royal_knight'].includes(unitType)) return 3;
+  if (unitType === 'surveyor') return 3;
+  return 1;
+}
+
+function actionPointsFor(unitType) {
+  if (unitType === 'architect') return 2;
+  if (['crossbow', 'barrage_captain'].includes(unitType)) return 2;
   return 1;
 }
 
@@ -531,7 +538,7 @@ function resetTurnActions(player) {
   for (const unit of units.values()) {
     if (unit.player === player) {
       unit.movesLeft = movePointsFor(unit.type);
-      unit.actionsLeft = 1;
+      unit.actionsLeft = actionPointsFor(unit.type);
     }
   }
 }
@@ -614,8 +621,9 @@ function getCavalryDestinations(fromKey, unit) {
 
       const nextClosed = isTileClosedFor(startPlayer, nextKey);
 
-      // Cavalry may pass through open tiles, including tiles occupied by friendlies.
-      const canPass = !nextClosed;
+      // Cavalry may pass through open tiles and friendlies, but not through hostile units.
+      const hostileOcc = occ && occ.player !== startPlayer;
+      const canPass = !nextClosed && !hostileOcc;
       const canStop = !friendlyOcc; // cannot end on a friendly-occupied tile
 
       if (canStop) {
@@ -636,6 +644,58 @@ function getCavalryDestinations(fromKey, unit) {
   return destinations;
 }
 
+function getSurveyorReach(fromKey, unit) {
+  const maxSteps = Math.max(1, unit.movesLeft);
+  const startPlayer = unit.player;
+  const queue = [{ key: fromKey, steps: 0 }];
+  const bestSteps = new Map([[fromKey, 0]]);
+  const parent = new Map();
+  const destinations = new Set();
+
+  while (queue.length) {
+    const current = queue.shift();
+    if (!current) break;
+
+    for (const nextKey of adjacentKeys(current.key)) {
+      const step = current.steps + 1;
+      if (step > maxSteps) continue;
+
+      const occ = unitAtKey(nextKey);
+      const friendlyOcc = occ && occ.player === startPlayer;
+      const hostileOcc = occ && occ.player !== startPlayer;
+      const nextClosed = isTileClosedFor(startPlayer, nextKey);
+
+      const canPass = !nextClosed && !hostileOcc;
+      const canStop = !occ; // surveyor ends on empty tile only
+
+      if (canStop) destinations.add(nextKey);
+
+      if (canPass) {
+        const seen = bestSteps.get(nextKey);
+        if (seen === undefined || step < seen) {
+          bestSteps.set(nextKey, step);
+          parent.set(nextKey, current.key);
+          queue.push({ key: nextKey, steps: step });
+        }
+      }
+    }
+  }
+
+  destinations.delete(fromKey);
+  return { destinations, parent };
+}
+
+function reconstructPath(parent, startKey, endKey) {
+  const path = [endKey];
+  let cur = endKey;
+  while (cur !== startKey) {
+    cur = parent.get(cur);
+    if (!cur) break;
+    path.push(cur);
+  }
+  return path.reverse();
+}
+
 function explainMoveFailure(fromKey, toKey) {
   if (!cellKeys.has(fromKey) || !cellKeys.has(toKey)) return 'Move invalid: out of map bounds.';
   if (fromKey === toKey) return 'Move invalid: source and destination are the same tile.';
@@ -645,7 +705,10 @@ function explainMoveFailure(fromKey, toKey) {
   if (unit.player !== currentPlayer) return `Move invalid: it is ${currentPlayer}'s turn.`;
   if (unit.movesLeft <= 0) return 'Move invalid: unit has no moves left this turn.';
 
-  if (isCavalry(unit.type)) {
+  if (unit.type === 'surveyor') {
+    const reach = getSurveyorReach(fromKey, unit);
+    if (!reach.destinations.has(toKey)) return 'Move invalid: surveyor can only end on highlighted open-path destinations.';
+  } else if (isCavalry(unit.type)) {
     const targets = getCavalryDestinations(fromKey, unit);
     if (!targets.has(toKey)) return 'Move invalid: cavalry can only end on highlighted destinations reached through open-path routing.';
   } else {
@@ -658,6 +721,9 @@ function explainMoveFailure(fromKey, toKey) {
   if (destUnit && destUnit.player === unit.player) return 'Move invalid: destination occupied by your own unit.';
 
   if (destUnit && destUnit.player !== unit.player) {
+    const canAttackMoveArcher = ['crossbow', 'barrage_captain'].includes(unit.type);
+    if (isArcher(unit.type) && !canAttackMoveArcher) return `Move invalid: ${unit.type} cannot attack-move; use ranged attack.`;
+    if (canAttackMoveArcher && unit.actionsLeft <= 0) return `Move invalid: ${unit.type} has no attack actions left.`;
     if (['spearman', 'pikeman', 'lancer'].includes(unit.type) && isTileClosedFor(unit.player, toKey)) {
       return `Attack invalid: ${unit.type} cannot attack into closed terrain.`;
     }
@@ -674,7 +740,10 @@ function canMove(fromKey, toKey) {
   if (!unit || unit.player !== currentPlayer || unit.movesLeft <= 0) return false;
   if (destinationUnit && destinationUnit.player === unit.player) return false;
 
-  if (isCavalry(unit.type)) {
+  if (unit.type === 'surveyor') {
+    const reach = getSurveyorReach(fromKey, unit);
+    if (!reach.destinations.has(toKey)) return false;
+  } else if (isCavalry(unit.type)) {
     const targets = getCavalryDestinations(fromKey, unit);
     if (!targets.has(toKey)) return false;
   } else {
@@ -684,6 +753,9 @@ function canMove(fromKey, toKey) {
   }
 
   if (destinationUnit && destinationUnit.player !== unit.player) {
+    const canAttackMoveArcher = ['crossbow', 'barrage_captain'].includes(unit.type);
+    if (isArcher(unit.type) && !canAttackMoveArcher) return false;
+    if (canAttackMoveArcher && unit.actionsLeft <= 0) return false;
     if (['spearman', 'pikeman', 'lancer'].includes(unit.type) && isTileClosedFor(unit.player, toKey)) return false;
   }
 
@@ -758,6 +830,7 @@ function rangedAttack(fromKey, toKey) {
 function getMoveTargets(fromKey) {
   const unit = units.get(fromKey);
   if (!unit) return [];
+  if (unit.type === 'surveyor') return [...getSurveyorReach(fromKey, unit).destinations];
   if (isCavalry(unit.type)) return [...getCavalryDestinations(fromKey, unit)];
   return cells.map(keyOf).filter((toKey) => canMove(fromKey, toKey));
 }
@@ -810,14 +883,39 @@ function moveUnit(fromKey, toKey) {
   const destTile = getTile(toKey);
   if (!unit || !destTile) return;
 
-  const nextMoves = isCavalry(unit.type) ? 0 : unit.movesLeft - 1;
+  let usedSteps = 1;
+  let surveyorPath = null;
+  if (unit.type === 'surveyor') {
+    const reach = getSurveyorReach(fromKey, unit);
+    surveyorPath = reconstructPath(reach.parent, fromKey, toKey);
+    usedSteps = Math.max(1, surveyorPath.length - 1);
+  }
+
+  const nextMoves = isCavalry(unit.type) ? 0 : Math.max(0, unit.movesLeft - usedSteps);
   const priorOwner = destTile.owner;
   const warning = moveEconomyWarning(fromKey, toKey, nextMoves);
 
+  const defeated = units.get(toKey) && units.get(toKey).player !== unit.player;
+
   // Movement never blocked by economy; shortages resolve on turn rollover.
   unit.movesLeft = nextMoves;
+  if (defeated && ['crossbow', 'barrage_captain'].includes(unit.type)) unit.actionsLeft = Math.max(0, unit.actionsLeft - 1);
   units.set(toKey, unit);
   units.delete(fromKey);
+
+  // Surveyor claims every tile along a multi-step route.
+  if (unit.type === 'surveyor' && surveyorPath) {
+    for (const k of surveyorPath.slice(0, -1)) {
+      const t = getTile(k);
+      if (!t) continue;
+      const needsUpkeep = Boolean(structureUpkeep[t.type]);
+      if (!needsUpkeep || canClaimUpkeepTileNow(unit.player, t.type)) {
+        t.owner = unit.player;
+      } else {
+        t.owner = null;
+      }
+    }
+  }
 
   let claimText = '';
   const upkeepRequired = Boolean(structureUpkeep[destTile.type]);
@@ -1064,6 +1162,19 @@ function renderLancerGlyph(pos) {
   return g;
 }
 
+function renderLongbowGlyph(pos) {
+  const g = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+  const bow = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+  bow.setAttribute('x', String(pos.x));
+  bow.setAttribute('y', String(pos.y + 1));
+  bow.setAttribute('class', 'unit-icon');
+  bow.style.fontSize = '18px';
+  bow.textContent = '🏹';
+  g.appendChild(bow);
+  drawSpear(g, pos.x - 9, pos.y + 10, pos.x + 11, pos.y - 11, 2.6);
+  return g;
+}
+
 function renderCrossbowGlyph(pos) {
   const g = document.createElementNS('http://www.w3.org/2000/svg', 'g');
   const swords = document.createElementNS('http://www.w3.org/2000/svg', 'text');
@@ -1112,6 +1223,10 @@ function renderUnitGlyph(unit, pos, group) {
   }
   if (unit.type === 'lancer') {
     group.appendChild(renderLancerGlyph(pos));
+    return;
+  }
+  if (unit.type === 'longbow') {
+    group.appendChild(renderLongbowGlyph(pos));
     return;
   }
   if (unit.type === 'crossbow') {
