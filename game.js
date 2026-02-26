@@ -3,6 +3,8 @@ const statusText = document.getElementById('status');
 const resourcesEl = document.getElementById('resources');
 const selectionEl = document.getElementById('selection');
 const endTurnBtn = document.getElementById('end-turn');
+const mosaicResolutionEl = document.getElementById('mosaic-resolution');
+const mosaicResolutionValueEl = document.getElementById('mosaic-resolution-value');
 const modeMenuEl = document.getElementById('mode-menu');
 const start1pBtn = document.getElementById('start-1p');
 const start2pBtn = document.getElementById('start-2p');
@@ -13,6 +15,7 @@ const ORIGIN = { x: 980, y: 860 };
 const DIRECTIONS = [[1, 0], [1, -1], [0, -1], [-1, 0], [-1, 1], [0, 1]];
 const MAP_RADIUS = 6; // 127 tiles
 const SOLO_START_RADIUS = 2; // 19 tiles
+let mosaicResolution = 50;
 
 const weightedTypes = [
   ...Array(64).fill('forest'),
@@ -238,6 +241,15 @@ function mixHexWeighted(entries) {
   if (!tw) return '#888888';
   const toHex = (n) => Math.round(n).toString(16).padStart(2, '0');
   return `#${toHex(r / tw)}${toHex(g / tw)}${toHex(b / tw)}`;
+}
+
+function colorForTileShard(tile, shardIdx = 1) {
+  const palette = tilePalettes[tile.type] || ['#888', '#888', '#888'];
+  const baseColor = palette[shardIdx] || palette[1] || palette[0] || '#888';
+  const ownerTint = ownerColor(tile.owner);
+  if (!ownerTint) return baseColor;
+  const softenedOwnerTint = blendHex(ownerTint, baseColor, 0.5);
+  return shardIdx === 2 ? softenedOwnerTint : baseColor;
 }
 
 function productionQtyForTile(player, tile, tileSnapshot = tiles, unitSnapshot = units) {
@@ -1340,67 +1352,73 @@ function render(logs = []) {
   const activeFocus = resourceHover || resourceFocus;
   const focusedKeys = activeFocus ? getResourceContributors(currentPlayer, activeFocus.resource, activeFocus.mode) : null;
 
-  const globalMini = [];
-  for (let mq = -86; mq <= 86; mq += 1) {
-    for (let mr = -86; mr <= 86; mr += 1) {
-      const miniPos = axialToPixel({ q: mq, r: mr }, MINI_RADIUS);
-      globalMini.push({ mq, mr, pos: miniPos, idx: ((mq - mr) % 3 + 3) % 3 });
-    }
-  }
-
   const tileCenters = tiles.map((tile) => ({ tile, pos: axialToPixel(tile), poly: polygonVertices(axialToPixel(tile), HEX_RADIUS) }));
   const tileMap = new Map(tiles.map((t) => [keyOf(t), t]));
 
-  // Dominant-bleed mosaic with map-edge cutoff and proportional background fade for overhanging mini-hexes.
+  // Dominant-bleed mosaic with adjustable resolution.
   const mosaicGroup = document.createElementNS('http://www.w3.org/2000/svg', 'g');
   mosaicGroup.setAttribute('pointer-events', 'none');
   const edgeCutoff = (HEX_RADIUS * 1.2) ** 2;
   const fadeEnd = edgeCutoff * 1.18;
 
-  for (const mini of globalMini) {
-    const candidates = [];
-    let minDist = Infinity;
-    const nearTiles = [];
+  if (mosaicResolution <= 1) {
     for (const tc of tileCenters) {
-      const dx = tc.pos.x - mini.pos.x;
-      const dy = tc.pos.y - mini.pos.y;
-      const d2 = dx * dx + dy * dy;
-      if (d2 < minDist) minDist = d2;
-      if (d2 <= fadeEnd) {
-        nearTiles.push(tc);
-        const baseColor = tilePalettes[tc.tile.type][mini.idx] || '#888';
-        const ownerTint = ownerColor(tc.tile.owner);
-        const softenedOwnerTint = ownerTint ? blendHex(ownerTint, baseColor, 0.5) : null;
-        const color = softenedOwnerTint && mini.idx === 2 ? softenedOwnerTint : baseColor;
-        candidates.push({ color, weight: 1 / (Math.sqrt(d2) + 1) });
+      const solidPoly = document.createElementNS('http://www.w3.org/2000/svg', 'polygon');
+      solidPoly.setAttribute('points', polygonPoints(tc.pos, HEX_RADIUS));
+      solidPoly.setAttribute('fill', colorForTileShard(tc.tile, 1));
+      solidPoly.setAttribute('stroke', 'none');
+      mosaicGroup.appendChild(solidPoly);
+    }
+  } else {
+    const miniRadius = Math.max(2.8, HEX_RADIUS / (1 + mosaicResolution * 0.06));
+    const gridRange = Math.ceil((MAP_RADIUS + 2) * (HEX_RADIUS / miniRadius) * 2.7);
+    const globalMini = [];
+    for (let mq = -gridRange; mq <= gridRange; mq += 1) {
+      for (let mr = -gridRange; mr <= gridRange; mr += 1) {
+        const miniPos = axialToPixel({ q: mq, r: mr }, miniRadius);
+        globalMini.push({ mq, mr, pos: miniPos, idx: ((mq - mr) % 3 + 3) % 3 });
       }
     }
-    if (!candidates.length || minDist > fadeEnd) continue;
 
-    // Estimate mini-hex overhang ratio by sampling center + 6 vertices against nearby big-hex polygons.
-    const samplePts = [[mini.pos.x, mini.pos.y], ...polygonVertices(mini.pos, MINI_RADIUS)];
-    let insideCount = 0;
-    for (const [sx, sy] of samplePts) {
-      let insideAny = false;
-      for (const tc of nearTiles) {
-        if (pointInPolygon(sx, sy, tc.poly)) { insideAny = true; break; }
+    for (const mini of globalMini) {
+      const candidates = [];
+      let minDist = Infinity;
+      const nearTiles = [];
+      for (const tc of tileCenters) {
+        const dx = tc.pos.x - mini.pos.x;
+        const dy = tc.pos.y - mini.pos.y;
+        const d2 = dx * dx + dy * dy;
+        if (d2 < minDist) minDist = d2;
+        if (d2 <= fadeEnd) {
+          nearTiles.push(tc);
+          const color = colorForTileShard(tc.tile, mini.idx);
+          candidates.push({ color, weight: 1 / (Math.sqrt(d2) + 1) });
+        }
       }
-      if (insideAny) insideCount += 1;
-    }
-    const insideRatio = insideCount / samplePts.length;
-    const overhang = Math.max(0, 1 - insideRatio);
+      if (!candidates.length || minDist > fadeEnd) continue;
 
-    if (overhang > 0) {
-      // More overhang => more background contribution, but avoid crushing to pure black.
-      const bgWeight = 0.45 * (overhang ** 1.5);
-      candidates.push({ color: '#0b1230', weight: bgWeight });
-    }
+      const samplePts = [[mini.pos.x, mini.pos.y], ...polygonVertices(mini.pos, miniRadius)];
+      let insideCount = 0;
+      for (const [sx, sy] of samplePts) {
+        let insideAny = false;
+        for (const tc of nearTiles) {
+          if (pointInPolygon(sx, sy, tc.poly)) { insideAny = true; break; }
+        }
+        if (insideAny) insideCount += 1;
+      }
+      const insideRatio = insideCount / samplePts.length;
+      const overhang = Math.max(0, 1 - insideRatio);
+      if (overhang > 0) {
+        const bgWeight = 0.45 * (overhang ** 1.5);
+        candidates.push({ color: '#0b1230', weight: bgWeight });
+      }
 
-    const miniPoly = document.createElementNS('http://www.w3.org/2000/svg', 'polygon');
-    miniPoly.setAttribute('points', polygonPoints(mini.pos, MINI_RADIUS));
-    miniPoly.setAttribute('fill', mixHexWeighted(candidates));
-    miniPoly.setAttribute('stroke', 'none');
-    mosaicGroup.appendChild(miniPoly);
+      const miniPoly = document.createElementNS('http://www.w3.org/2000/svg', 'polygon');
+      miniPoly.setAttribute('points', polygonPoints(mini.pos, miniRadius));
+      miniPoly.setAttribute('fill', mixHexWeighted(candidates));
+      miniPoly.setAttribute('stroke', 'none');
+      mosaicGroup.appendChild(miniPoly);
+    }
   }
   board.appendChild(mosaicGroup);
 
@@ -1607,4 +1625,12 @@ endTurnBtn.addEventListener('click', () => {
 
 start1pBtn?.addEventListener('click', () => startGame('solo'));
 start2pBtn?.addEventListener('click', () => startGame('duo'));
+
+if (mosaicResolutionValueEl) mosaicResolutionValueEl.textContent = String(mosaicResolution);
+mosaicResolutionEl?.addEventListener('input', () => {
+  mosaicResolution = Number(mosaicResolutionEl.value) || 1;
+  if (mosaicResolutionValueEl) mosaicResolutionValueEl.textContent = String(mosaicResolution);
+  render();
+});
+
 render();
