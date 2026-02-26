@@ -380,6 +380,7 @@ let cellKeys = new Set();
 let tiles = [];
 let units = new Map();
 let gameMode = null; // 'solo' | 'duo'
+let startInProgress = false;
 
 function makeTile(cell) {
   const type = randomType();
@@ -452,6 +453,16 @@ function setupSoloGame() {
 }
 
 function startGame(mode) {
+  if (startInProgress) return;
+  startInProgress = true;
+
+  if (start1pBtn) start1pBtn.disabled = true;
+  if (start2pBtn) start2pBtn.disabled = true;
+  if (statusText) statusText.textContent = `Starting ${mode === 'solo' ? '1-player' : '2-player'} game...`;
+  if (modeMenuEl) modeMenuEl.classList.add('hidden');
+
+  // Let the menu hide paint first so startup work doesn't look like a frozen click.
+  requestAnimationFrame(() => {
   gameMode = mode;
   currentPlayer = 'blue';
   selectedKey = null;
@@ -459,8 +470,9 @@ function startGame(mode) {
   resourceFocus = null;
   resourceHover = null;
   if (mode === 'solo') setupSoloGame(); else setupDuoGame();
-  modeMenuEl.classList.add('hidden');
   render();
+  startInProgress = false;
+  });
 }
 
 let currentPlayer = 'blue';
@@ -1371,10 +1383,6 @@ function render(logs = []) {
 
   const preset = MOSAIC_PRESETS[mosaicResolution] || MOSAIC_PRESETS[3];
   if (!preset.miniRadius) {
-  const preset = MOSAIC_PRESETS[mosaicResolution] || MOSAIC_PRESETS[3];
-  if (!preset.miniRadius) {
-
-    
     for (const tc of tileCenters) {
       const solidPoly = document.createElementNS('http://www.w3.org/2000/svg', 'polygon');
       solidPoly.setAttribute('points', polygonPoints(tc.pos, HEX_RADIUS));
@@ -1386,9 +1394,6 @@ function render(logs = []) {
     const miniRadius = preset.miniRadius;
     const maxTileDist = tiles.reduce((acc, t) => Math.max(acc, cubeDistance({ q: 0, r: 0 }, t)), 0);
     const gridRange = Math.min(90, Math.ceil((maxTileDist + 2) * (HEX_RADIUS / miniRadius) * 2.2));
-    const miniRadius = preset.miniRadius;
-    const gridRange = Math.ceil((MAP_RADIUS + 2) * (HEX_RADIUS / miniRadius) * 2.7);
-
     const globalMini = [];
     for (let mq = -gridRange; mq <= gridRange; mq += 1) {
       for (let mr = -gridRange; mr <= gridRange; mr += 1) {
@@ -1648,11 +1653,6 @@ mosaicResolutionEl?.addEventListener('input', () => {
   const next = Number(mosaicResolutionEl.value);
   mosaicResolution = Number.isFinite(next) ? Math.max(0, Math.min(MOSAIC_PRESETS.length - 1, Math.round(next))) : 2;
   if (mosaicResolutionValueEl) mosaicResolutionValueEl.textContent = MOSAIC_PRESETS[mosaicResolution]?.name || 'Balanced';
-if (mosaicResolutionValueEl) mosaicResolutionValueEl.textContent = MOSAIC_PRESETS[mosaicResolution]?.name || 'Medium';
-mosaicResolutionEl?.addEventListener('input', () => {
-  const next = Number(mosaicResolutionEl.value);
-  mosaicResolution = Number.isFinite(next) ? Math.max(0, Math.min(MOSAIC_PRESETS.length - 1, Math.round(next))) : 3;
-  if (mosaicResolutionValueEl) mosaicResolutionValueEl.textContent = MOSAIC_PRESETS[mosaicResolution]?.name || 'Medium';
   render();
 });
 
