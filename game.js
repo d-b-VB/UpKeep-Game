@@ -1629,7 +1629,7 @@ endTurnBtn.addEventListener('click', () => {
   resetTurnActions(currentPlayer);
   revealSoloTiles();
   selectedKey = null;
-  lastDebug = 'Turn advanced. Economy table reflects continuous produced/used/available flow.';
+  lastDebug = 'Turn advanced. Economy table reflects continuous produced/used/available flow';
   render(logs);
 });
 
