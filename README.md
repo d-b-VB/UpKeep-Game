@@ -48,3 +48,6 @@ Then open:
 ## Controls
 - Click or tap a highlighted adjacent hex to move the hammer.
 - Keyboard: tab to a highlighted hex, then press `Enter` or `Space`.
+
+## Note
+- Small follow-up documentation touch-up commit to help unblock push/retry workflows.
