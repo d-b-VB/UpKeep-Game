@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>UpKeep Tile Ownership Demo</title>
+  <style>
+    :root { color-scheme: dark; }
+    body { margin: 0; font-family: Inter, system-ui, -apple-system, Segoe UI, Roboto, sans-serif; background:#0f172a; color:#e2e8f0; }
+    .wrap { max-width: 1100px; margin: 0 auto; padding: 18px; }
+    h1 { margin: 0 0 8px; font-size: 1.25rem; }
+    p { margin: 0 0 14px; color:#94a3b8; }
+    svg { width: 100%; height: auto; background: #111827; border: 1px solid #334155; border-radius: 12px; }
+    .label { font-size: 12px; fill: #cbd5e1; text-anchor: middle; }
+    .row-label { font-size: 12px; fill: #e2e8f0; text-anchor: end; }
+  </style>
+</head>
+<body>
+  <main class="wrap">
+    <h1>Tile Appearance Demo (Neutral / Red / Blue)</h1>
+    <p>Side demo page to visualize each tile type under ownership tinting.</p>
+    <svg id="demo" viewBox="0 0 1080 920" role="img" aria-label="Hex tile ownership preview"></svg>
+  </main>
+  <script src="tile-demo.js"></script>
+</body>
+</html>
