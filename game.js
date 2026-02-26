@@ -74,7 +74,6 @@ const UNIT_DEFS = {
   longbow: { emoji: '🏹', cls: 'archer', terrainUpgrader: false },
   crossbow: { emoji: '🏹', cls: 'archer', terrainUpgrader: false },
   barrage_captain: { emoji: '🎖️', cls: 'archer', terrainUpgrader: false },
-  slinger: { emoji: '🪃', cls: 'archer', terrainUpgrader: false }, // alias of rangehand
 
   horseman: { emoji: '🐎', cls: 'cavalry', terrainUpgrader: false },
   lancer: { emoji: '🗡️', cls: 'cavalry', terrainUpgrader: false },
@@ -86,7 +85,7 @@ const unitUpkeep = {
   worker: { crops: 1 }, laborer: { crops: 1 }, axman: { provisions: 1 }, rangehand: { crops: 1 }, surveyor: { crops: 1, livestock: 1 },
   constable: { support: 1 }, architect: { crops: 1 },
   spearman: { crops: 1 }, swordsman: { crops: 1 }, pikeman: { crops: 1 }, infantry_sergeant: { support: 1 },
-  hunter: { crops: 1, wood: 1 }, longbow: { wood: 1 }, crossbow: { wood: 1, crops: 1 }, barrage_captain: { authority: 1 }, slinger: { crops: 1 },
+  hunter: { crops: 1, wood: 1 }, longbow: { wood: 1 }, crossbow: { wood: 1, crops: 1 }, barrage_captain: { authority: 1 },
   horseman: { crops: 1, livestock: 1 }, lancer: { crops: 1, livestock: 1 }, cavalry_archer: { crops: 1, wood: 1, livestock: 1 }, royal_knight: { sovereignty: 1 },
 };
 
@@ -170,6 +169,81 @@ const resourceEmoji = {
 function keyOf(cell) { return `${cell.q},${cell.r}`; }
 function randomType() { return weightedTypes[Math.floor(Math.random() * weightedTypes.length)]; }
 function ownerColor(player) { return player === 'blue' ? '#3b82f6' : player === 'red' ? '#ef4444' : null; }
+
+function blendHex(colorA, colorB, weightA = 0.5) {
+  if (!colorA || !colorB) return colorA || colorB || '#888';
+  const a = colorA.replace('#', '');
+  const b = colorB.replace('#', '');
+  if (a.length !== 6 || b.length !== 6) return colorA;
+
+  const wa = Math.max(0, Math.min(1, weightA));
+  const wb = 1 - wa;
+  const toInt = (hh) => parseInt(hh, 16);
+  const toHex = (n) => Math.round(n).toString(16).padStart(2, '0');
+
+  const ar = toInt(a.slice(0, 2)); const ag = toInt(a.slice(2, 4)); const ab = toInt(a.slice(4, 6));
+  const br = toInt(b.slice(0, 2)); const bg = toInt(b.slice(2, 4)); const bb = toInt(b.slice(4, 6));
+
+  return `#${toHex(ar * wa + br * wb)}${toHex(ag * wa + bg * wb)}${toHex(ab * wa + bb * wb)}`;
+}
+
+function hexToRgb(hex) {
+  const v = (hex || '').replace('#', '');
+  if (v.length !== 6) return null;
+  return {
+    r: parseInt(v.slice(0, 2), 16),
+    g: parseInt(v.slice(2, 4), 16),
+    b: parseInt(v.slice(4, 6), 16),
+  };
+}
+
+function mixHexWeighted(entries) {
+  let tw = 0;
+  let r = 0; let g = 0; let b = 0;
+  for (const e of entries) {
+    const rgb = hexToRgb(e.color);
+    if (!rgb || !e.weight || e.weight <= 0) continue;
+    tw += e.weight;
+    r += rgb.r * e.weight;
+    g += rgb.g * e.weight;
+    b += rgb.b * e.weight;
+  }
+  if (!tw) return '#888888';
+  const toHex = (n) => Math.round(n).toString(16).padStart(2, '0');
+  return `#${toHex(r / tw)}${toHex(g / tw)}${toHex(b / tw)}`;
+}
+
+function productionQtyForTile(player, tile, tileSnapshot = tiles, unitSnapshot = units) {
+  const prodKey = productionByType[tile.type];
+  if (!prodKey || tile.owner !== player) return 0;
+
+  const tileMap = new Map(tileSnapshot.map((t) => [keyOf(t), t]));
+  const settlementTypes = new Set(Object.keys(structureUpkeep));
+  const hasPalace = tileSnapshot.some((t) => t.owner === player && t.type === 'palace');
+  const adjacentOwned = adjacentKeys(keyOf(tile)).map((k) => tileMap.get(k)).filter((t) => t && t.owner === player);
+
+  let additive = 0;
+  const occ = unitSnapshot.get(keyOf(tile));
+  if (occ?.player === player && ['laborer', 'rangehand'].includes(occ.type)) additive += 1;
+  additive += adjacentOwned.filter((t) => t.type === 'estate').length;
+
+  for (const t of adjacentOwned) {
+    const u = unitSnapshot.get(keyOf(t));
+    if (u?.player === player && u.type === 'constable') {
+      const here = unitSnapshot.get(keyOf(tile));
+      if (here?.player === player) additive += 1;
+    }
+  }
+
+  let qty = 1 + additive;
+  if (settlementTypes.has(tile.type)) {
+    const manorAdj = adjacentOwned.filter((t) => t.type === 'manor').length;
+    if (manorAdj > 0) qty *= (2 ** manorAdj);
+    if (hasPalace) qty *= 2;
+  }
+
+  return qty;
+}
 function pick(arr) { return arr[Math.floor(Math.random() * arr.length)]; }
 
 function buildSymbols(type) {
@@ -277,7 +351,7 @@ function computeEconomy(player, tileSnapshot = tiles, unitSnapshot = units) {
     if (tile.owner !== player) continue;
 
     const prodKey = productionByType[tile.type];
-    if (prodKey) produced[prodKey] += 1;
+    if (prodKey) produced[prodKey] += productionQtyForTile(player, tile, tileSnapshot, unitSnapshot);
 
     const sNeed = structureUpkeep[tile.type] || {};
     for (const [res, amt] of Object.entries(sNeed)) used[res] += amt;
@@ -459,7 +533,6 @@ function isTileClosedFor(player, key) {
 }
 
 function canUseLongWeaponFrom(key, unitType) {
-  // Spears/pikes/lances may be used while LEAVING closed spaces (per updated rule).
   // Longbow remains ineffective from closed spaces.
   if (unitType !== 'longbow') return true;
   const unit = unitAtKey(key);
@@ -487,13 +560,13 @@ function getCavalryDestinations(fromKey, unit) {
       if (step > maxSteps) continue;
 
       const occ = unitAtKey(nextKey);
-      if (occ && occ.player === startPlayer) continue;
+      const friendlyOcc = occ && occ.player === startPlayer;
 
       const nextClosed = isTileClosedFor(startPlayer, nextKey);
 
-      // You may pass THROUGH open tiles only.
-      const canPass = !nextClosed && !occ;
-      const canStop = true; // can end in open or closed, with or without enemy
+      // Cavalry may pass through open tiles, including tiles occupied by friendlies.
+      const canPass = !nextClosed;
+      const canStop = !friendlyOcc; // cannot end on a friendly-occupied tile
 
       if (canStop) {
         destinations.add(nextKey);
@@ -584,8 +657,10 @@ function canRangedAttack(fromKey, toKey) {
   if (!isArcher(attacker.type) || attacker.actionsLeft <= 0) return false;
   if (!canUseLongWeaponFrom(fromKey, attacker.type)) return false;
 
-  // Rangehand/slinger can only shoot first, then move.
-  if (['rangehand', 'slinger'].includes(attacker.type) && attacker.movesLeft < movePointsFor(attacker.type)) return false;
+  const movedThisTurn = attacker.movesLeft < movePointsFor(attacker.type);
+
+  // Hunter/Longbow/Cavalry Archer cannot shoot into closed terrain after moving.
+  if (movedThisTurn && ['hunter', 'longbow', 'cavalry_archer'].includes(attacker.type) && isTileClosedFor(attacker.player, toKey)) return false;
 
   const from = getCellByKey(fromKey);
   const to = getCellByKey(toKey);
@@ -607,7 +682,8 @@ function explainAttackFailure(fromKey, toKey) {
   if (!target) return 'Attack invalid: no enemy unit on target tile.';
   if (target.player === currentPlayer) return 'Attack invalid: cannot target your own unit.';
   if (!canUseLongWeaponFrom(fromKey, attacker.type)) return `Attack invalid: ${attacker.type} cannot fire from closed terrain.`;
-  if (['rangehand', 'slinger'].includes(attacker.type) && attacker.movesLeft < movePointsFor(attacker.type)) return `Attack invalid: ${attacker.type} must shoot before moving.`;
+  const movedThisTurn = attacker.movesLeft < movePointsFor(attacker.type);
+  if (movedThisTurn && ['hunter', 'longbow', 'cavalry_archer'].includes(attacker.type) && isTileClosedFor(attacker.player, toKey)) return `Attack invalid: ${attacker.type} cannot shoot into closed terrain after moving.`;
   const from = getCellByKey(fromKey);
   const to = getCellByKey(toKey);
   const dist = cubeDistance(from, to);
@@ -869,10 +945,44 @@ function renderSpearmanGlyph(pos) {
   return group;
 }
 
+function renderLancerGlyph(pos) {
+  const g = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+
+  const horse = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+  horse.setAttribute('x', String(pos.x - 3));
+  horse.setAttribute('y', String(pos.y + 2));
+  horse.setAttribute('text-anchor', 'middle');
+  horse.setAttribute('class', 'unit-icon');
+  horse.textContent = '🐎';
+  g.appendChild(horse);
+
+  // Prominent handheld lance over the horse token.
+  const shaft = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+  shaft.setAttribute('x1', String(pos.x - 12));
+  shaft.setAttribute('y1', String(pos.y + 9));
+  shaft.setAttribute('x2', String(pos.x + 14));
+  shaft.setAttribute('y2', String(pos.y - 12));
+  shaft.setAttribute('stroke', '#fff');
+  shaft.setAttribute('stroke-width', '4');
+  shaft.setAttribute('stroke-linecap', 'round');
+
+  const tip = document.createElementNS('http://www.w3.org/2000/svg', 'polygon');
+  tip.setAttribute('points', `${pos.x + 16},${pos.y - 14} ${pos.x + 7},${pos.y - 12} ${pos.x + 13},${pos.y - 5}`);
+  tip.setAttribute('fill', '#fff');
+
+  g.appendChild(shaft);
+  g.appendChild(tip);
+  return g;
+}
+
 function renderUnitGlyph(unit, pos, group) {
   const emoji = UNIT_DEFS[unit.type]?.emoji || '❓';
   if (emoji === 'spear') {
     group.appendChild(renderSpearmanGlyph(pos));
+    return;
+  }
+  if (unit.type === 'lancer') {
+    group.appendChild(renderLancerGlyph(pos));
     return;
   }
   const icon = document.createElementNS('http://www.w3.org/2000/svg', 'text');
@@ -902,26 +1012,36 @@ function render(logs = []) {
   const mosaicGroup = document.createElementNS('http://www.w3.org/2000/svg', 'g');
   mosaicGroup.setAttribute('pointer-events', 'none');
   const edgeCutoff = (HEX_RADIUS * 1.2) ** 2;
+  const fadeStart = edgeCutoff * 0.72;
+  const fadeEnd = edgeCutoff * 1.18;
 
   for (const mini of globalMini) {
-    let best = null;
-    let bestDist = Infinity;
+    const candidates = [];
+    let minDist = Infinity;
     for (const tc of tileCenters) {
       const dx = tc.pos.x - mini.pos.x;
       const dy = tc.pos.y - mini.pos.y;
-      const d = dx * dx + dy * dy;
-      if (d < bestDist) {
-        bestDist = d;
-        best = tc.tile;
+      const d2 = dx * dx + dy * dy;
+      if (d2 < minDist) minDist = d2;
+      if (d2 <= fadeEnd) {
+        const baseColor = tilePalettes[tc.tile.type][mini.idx] || '#888';
+        const ownerTint = ownerColor(tc.tile.owner);
+        const softenedOwnerTint = ownerTint ? blendHex(ownerTint, baseColor, 0.5) : null;
+        const color = softenedOwnerTint && mini.idx === 2 ? softenedOwnerTint : baseColor;
+        candidates.push({ color, weight: 1 / (Math.sqrt(d2) + 1) });
       }
     }
-    if (!best || bestDist > edgeCutoff) continue;
+    if (!candidates.length || minDist > fadeEnd) continue;
 
-    const ownerTint = ownerColor(best.owner);
+    // Blend in board background near map edge so overhanging mini-hexes fade to black.
+    if (minDist > fadeStart) {
+      const t = Math.min(1, (minDist - fadeStart) / (fadeEnd - fadeStart));
+      candidates.push({ color: '#000000', weight: 0.25 + (2.4 * t) });
+    }
+
     const miniPoly = document.createElementNS('http://www.w3.org/2000/svg', 'polygon');
     miniPoly.setAttribute('points', polygonPoints(mini.pos, MINI_RADIUS));
-    const baseColor = tilePalettes[best.type][mini.idx] || '#888';
-    miniPoly.setAttribute('fill', ownerTint && mini.idx === 2 ? ownerTint : baseColor);
+    miniPoly.setAttribute('fill', mixHexWeighted(candidates));
     miniPoly.setAttribute('stroke', 'none');
     mosaicGroup.appendChild(miniPoly);
   }
@@ -984,6 +1104,7 @@ function render(logs = []) {
       }
     }
 
+    const houses = new Set(['🏠', '🏡']);
     tile.symbols.forEach((symbol, i) => {
       const angle = (Math.PI / 180) * (60 * i - 30);
       const sx = pos.x + (HEX_RADIUS * 0.5) * Math.cos(angle);
@@ -993,9 +1114,34 @@ function render(logs = []) {
       text.setAttribute('y', String(sy + 5));
       text.setAttribute('text-anchor', 'middle');
       text.setAttribute('class', 'symbol');
+      if (houses.has(symbol)) {
+        text.style.fontSize = '15px';
+        text.style.stroke = 'rgba(10,14,28,0.95)';
+        text.style.strokeWidth = '1.6px';
+        text.style.paintOrder = 'stroke';
+      }
       text.textContent = symbol;
       board.appendChild(text);
     });
+
+    const prodBoost = productionQtyForTile(tile.owner, tile) - 1;
+    if (tile.owner && prodBoost > 0) {
+      const fillerPool = ['✨', '✦', '·', '•', '✧', '◦'];
+      for (let i = 0; i < 6; i += 1) {
+        const angle = (Math.PI / 180) * (60 * i);
+        const sx = pos.x + (HEX_RADIUS * 0.68) * Math.cos(angle);
+        const sy = pos.y + (HEX_RADIUS * 0.68) * Math.sin(angle);
+        const f = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+        f.setAttribute('x', String(sx));
+        f.setAttribute('y', String(sy + 3));
+        f.setAttribute('text-anchor', 'middle');
+        f.setAttribute('class', 'symbol');
+        f.style.fontSize = '6.5px';
+        f.style.opacity = '0.9';
+        f.textContent = fillerPool[(i + Math.max(1, prodBoost)) % fillerPool.length];
+        board.appendChild(f);
+      }
+    }
 
     const unit = units.get(key);
     if (unit) {
