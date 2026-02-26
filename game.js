@@ -1371,6 +1371,10 @@ function render(logs = []) {
 
   const preset = MOSAIC_PRESETS[mosaicResolution] || MOSAIC_PRESETS[3];
   if (!preset.miniRadius) {
+  const preset = MOSAIC_PRESETS[mosaicResolution] || MOSAIC_PRESETS[3];
+  if (!preset.miniRadius) {
+
+    
     for (const tc of tileCenters) {
       const solidPoly = document.createElementNS('http://www.w3.org/2000/svg', 'polygon');
       solidPoly.setAttribute('points', polygonPoints(tc.pos, HEX_RADIUS));
@@ -1382,6 +1386,9 @@ function render(logs = []) {
     const miniRadius = preset.miniRadius;
     const maxTileDist = tiles.reduce((acc, t) => Math.max(acc, cubeDistance({ q: 0, r: 0 }, t)), 0);
     const gridRange = Math.min(90, Math.ceil((maxTileDist + 2) * (HEX_RADIUS / miniRadius) * 2.2));
+    const miniRadius = preset.miniRadius;
+    const gridRange = Math.ceil((MAP_RADIUS + 2) * (HEX_RADIUS / miniRadius) * 2.7);
+
     const globalMini = [];
     for (let mq = -gridRange; mq <= gridRange; mq += 1) {
       for (let mr = -gridRange; mr <= gridRange; mr += 1) {
@@ -1641,6 +1648,11 @@ mosaicResolutionEl?.addEventListener('input', () => {
   const next = Number(mosaicResolutionEl.value);
   mosaicResolution = Number.isFinite(next) ? Math.max(0, Math.min(MOSAIC_PRESETS.length - 1, Math.round(next))) : 2;
   if (mosaicResolutionValueEl) mosaicResolutionValueEl.textContent = MOSAIC_PRESETS[mosaicResolution]?.name || 'Balanced';
+if (mosaicResolutionValueEl) mosaicResolutionValueEl.textContent = MOSAIC_PRESETS[mosaicResolution]?.name || 'Medium';
+mosaicResolutionEl?.addEventListener('input', () => {
+  const next = Number(mosaicResolutionEl.value);
+  mosaicResolution = Number.isFinite(next) ? Math.max(0, Math.min(MOSAIC_PRESETS.length - 1, Math.round(next))) : 3;
+  if (mosaicResolutionValueEl) mosaicResolutionValueEl.textContent = MOSAIC_PRESETS[mosaicResolution]?.name || 'Medium';
   render();
 });
 
