@@ -159,6 +159,22 @@ const settlementVeg = ['🥕', '🥦', '🧄', '🥬', '🍅'];
 const homesteadAnimals = ['🦌', '🐗', '🐇', '🦃'];
 const homesteadVeg = ['🍄', '🥔', ...settlementVeg];
 
+const BONUS_SYMBOLS = {
+  forest: ['🪵', '🦉', '🦊', '🍄', '🦔', '🦌'],
+  pasture: ['🐕', '🐇', '🦆', '🍀', '🌾', '🐑'],
+  farm: ['🍓', '🍎', '🍐', '🐝', '🌻', '🧄'],
+  homestead: ['🥔', '🐔', '🍄', '🧺', '🪵', '🥕'],
+  village: ['🧀', '🥛', '🥚', '🍺', '🕯️', '🥖'],
+  town: ['🍻', '🥖', '🕯️', '🪙', '🧵', '🧺'],
+  city: ['🍷', '🥂', '💍', '🏛️', '🕯️', '🥐'],
+  manor: ['⚜️', '🪙', '🧵', '🧾', '🕯️', '🍷'],
+  estate: ['💠', '🎖️', '📜', '🧭', '🪙', '🧵'],
+  palace: ['👑', '💎', '🏺', '📯', '🕯️', '🪙'],
+  outpost: ['🛡️', '🧱', '🗡️', '🏹', '🧭', '📯'],
+  stronghold: ['🛡️', '⚒️', '🏹', '📯', '🧱', '🗡️'],
+  keep: ['👑', '🛡️', '📯', '🗡️', '⚔️', '🧱'],
+};
+
 const resourceKeys = ['wood', 'livestock', 'crops', 'provisions', 'supplies', 'crafts', 'luxury', 'support', 'authority', 'sovereignty'];
 
 const resourceEmoji = {
@@ -310,6 +326,18 @@ function polygonVertices(center, radius, angleDeg = -30) {
   });
 }
 
+function pointInPolygon(px, py, polygon) {
+  let inside = false;
+  for (let i = 0, j = polygon.length - 1; i < polygon.length; j = i++) {
+    const xi = polygon[i][0]; const yi = polygon[i][1];
+    const xj = polygon[j][0]; const yj = polygon[j][1];
+    const intersect = ((yi > py) !== (yj > py))
+      && (px < ((xj - xi) * (py - yi)) / ((yj - yi) || 1e-9) + xi);
+    if (intersect) inside = !inside;
+  }
+  return inside;
+}
+
 function cubeDistance(a, b) {
   const aq = a.q; const ar = a.r; const as = -aq - ar;
   const bq = b.q; const br = b.r; const bs = -bq - br;
@@ -338,6 +366,8 @@ placeStart(MAP_RADIUS, -MAP_RADIUS, 'red');
 let currentPlayer = 'blue';
 let selectedKey = null;
 let lastDebug = '';
+let resourceFocus = null; // { resource, mode: 'produced'|'used' }
+let resourceHover = null; // temporary hover focus
 
 function getTile(key) { return tiles.find((t) => keyOf(t) === key); }
 function getCellByKey(key) { const [q, r] = key.split(',').map(Number); return { q, r }; }
@@ -365,6 +395,26 @@ function computeEconomy(player, tileSnapshot = tiles, unitSnapshot = units) {
 
   const available = Object.fromEntries(resourceKeys.map((k) => [k, produced[k] - used[k]]));
   return { produced, used, available };
+}
+
+
+function getResourceContributors(player, resource, mode, tileSnapshot = tiles, unitSnapshot = units) {
+  const out = new Set();
+  for (const tile of tileSnapshot) {
+    if (tile.owner !== player) continue;
+    const key = keyOf(tile);
+
+    if (mode === 'produced') {
+      const prodKey = productionByType[tile.type];
+      if (prodKey === resource && productionQtyForTile(player, tile, tileSnapshot, unitSnapshot) > 0) out.add(key);
+      continue;
+    }
+
+    if (((structureUpkeep[tile.type] || {})[resource] || 0) > 0) out.add(key);
+    const u = unitSnapshot.get(key);
+    if (u && u.player === player && !freeUnitCondition[u.type]?.(tile) && ((unitUpkeep[u.type] || {})[resource] || 0) > 0) out.add(key);
+  }
+  return out;
 }
 
 function economyDeficits(player, tileSnapshot = tiles, unitSnapshot = units) {
@@ -859,13 +909,47 @@ function renderResources() {
         ${resourceKeys.map((k) => {
           const avail = eco.available[k];
           const availStyle = avail < 0 ? 'color:#ef4444;font-weight:700;text-align:center;' : 'text-align:center;';
-          return `<tr><td>${resourceEmoji[k] || ''} ${k}</td><td style="text-align:center;">${eco.produced[k]}</td><td style="text-align:center;">${eco.used[k]}</td><td style="${availStyle}">${avail}</td></tr>`;
+          const isFocused = resourceFocus?.resource === k;
+          const chipStyle = isFocused ? 'background:#334155;border-color:#94a3b8;' : 'background:transparent;border-color:#475569;';
+          return `<tr>
+            <td><button data-resource-toggle="${k}" style="border:1px solid;${chipStyle}color:#e2e8f0;border-radius:7px;padding:1px 6px;cursor:pointer;">${resourceEmoji[k] || ''}</button> ${k}</td>
+            <td data-resource-hover="${k}" data-resource-mode="produced" style="text-align:center;cursor:help;">${eco.produced[k]}</td>
+            <td data-resource-hover="${k}" data-resource-mode="used" style="text-align:center;cursor:help;">${eco.used[k]}</td>
+            <td style="${availStyle}">${avail}</td>
+          </tr>`;
         }).join('')}
       </tbody>
     </table>
-    <div style="margin-top:6px;font-size:12px;opacity:.85;">Continuous model: produced and used every turn; negative values are shortages (red).</div>
+    <div style="margin-top:6px;font-size:12px;opacity:.85;">Click resource emoji to cycle production/usage highlights. Hover Prod/Use numbers for temporary highlight.</div>
   `;
+
+  resourcesEl.querySelectorAll('[data-resource-toggle]').forEach((btn) => {
+    btn.addEventListener('click', (e) => {
+      e.preventDefault();
+      const resource = btn.getAttribute('data-resource-toggle');
+      if (!resourceFocus || resourceFocus.resource !== resource) {
+        resourceFocus = { resource, mode: 'produced' };
+      } else if (resourceFocus.mode === 'produced') {
+        resourceFocus = { resource, mode: 'used' };
+      } else {
+        resourceFocus = null;
+      }
+      render();
+    });
+  });
+
+  resourcesEl.querySelectorAll('[data-resource-hover]').forEach((cell) => {
+    cell.addEventListener('mouseenter', () => {
+      resourceHover = { resource: cell.getAttribute('data-resource-hover'), mode: cell.getAttribute('data-resource-mode') };
+      render();
+    });
+    cell.addEventListener('mouseleave', () => {
+      resourceHover = null;
+      render();
+    });
+  });
 }
+
 
 function renderSelectionPanel() {
   if (!selectedKey) {
@@ -927,27 +1011,46 @@ function renderStatus(logs = []) {
   statusText.textContent = `${unit.player.toUpperCase()} ${unit.type} selected. ${getMoveTargets(selectedKey).length} moves, ${getAttackTargets(selectedKey).length} shots. M:${unit.movesLeft} A:${unit.actionsLeft}. ${lastDebug || ''}`;
 }
 
+function drawSpear(group, x1, y1, x2, y2, width = 3) {
+  const shaft = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+  shaft.setAttribute('x1', String(x1));
+  shaft.setAttribute('y1', String(y1));
+  shaft.setAttribute('x2', String(x2));
+  shaft.setAttribute('y2', String(y2));
+  shaft.setAttribute('stroke', '#fff');
+  shaft.setAttribute('stroke-width', String(width));
+  shaft.setAttribute('stroke-linecap', 'round');
+  group.appendChild(shaft);
+
+  const dx = x2 - x1; const dy = y2 - y1;
+  const len = Math.hypot(dx, dy) || 1;
+  const ux = dx / len; const uy = dy / len;
+  const px = -uy; const py = ux;
+  const tipLen = 7;
+  const baseX = x2 - ux * tipLen;
+  const baseY = y2 - uy * tipLen;
+
+  const tip = document.createElementNS('http://www.w3.org/2000/svg', 'polygon');
+  tip.setAttribute('points', `${x2},${y2} ${baseX + px * 3.2},${baseY + py * 3.2} ${baseX - px * 3.2},${baseY - py * 3.2}`);
+  tip.setAttribute('fill', '#fff');
+  group.appendChild(tip);
+}
+
 function renderSpearmanGlyph(pos) {
   const group = document.createElementNS('http://www.w3.org/2000/svg', 'g');
-  const shaft = document.createElementNS('http://www.w3.org/2000/svg', 'line');
-  shaft.setAttribute('x1', String(pos.x - 8));
-  shaft.setAttribute('y1', String(pos.y + 8));
-  shaft.setAttribute('x2', String(pos.x + 10));
-  shaft.setAttribute('y2', String(pos.y - 10));
-  shaft.setAttribute('stroke', '#fff');
-  shaft.setAttribute('stroke-width', '3');
-  shaft.setAttribute('stroke-linecap', 'round');
-  const tip = document.createElementNS('http://www.w3.org/2000/svg', 'polygon');
-  tip.setAttribute('points', `${pos.x + 12},${pos.y - 12} ${pos.x + 5},${pos.y - 11} ${pos.x + 11},${pos.y - 5}`);
-  tip.setAttribute('fill', '#fff');
-  group.appendChild(shaft);
-  group.appendChild(tip);
+  drawSpear(group, pos.x - 8, pos.y + 8, pos.x + 10, pos.y - 10, 3);
+  return group;
+}
+
+function renderPikemanGlyph(pos) {
+  const group = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+  drawSpear(group, pos.x - 11, pos.y + 10, pos.x + 11, pos.y - 10, 2.8);
+  drawSpear(group, pos.x - 11, pos.y - 10, pos.x + 11, pos.y + 10, 2.8);
   return group;
 }
 
 function renderLancerGlyph(pos) {
   const g = document.createElementNS('http://www.w3.org/2000/svg', 'g');
-
   const horse = document.createElementNS('http://www.w3.org/2000/svg', 'text');
   horse.setAttribute('x', String(pos.x - 3));
   horse.setAttribute('y', String(pos.y + 2));
@@ -956,33 +1059,72 @@ function renderLancerGlyph(pos) {
   horse.textContent = '🐎';
   g.appendChild(horse);
 
-  // Prominent handheld lance over the horse token.
-  const shaft = document.createElementNS('http://www.w3.org/2000/svg', 'line');
-  shaft.setAttribute('x1', String(pos.x - 12));
-  shaft.setAttribute('y1', String(pos.y + 9));
-  shaft.setAttribute('x2', String(pos.x + 14));
-  shaft.setAttribute('y2', String(pos.y - 12));
-  shaft.setAttribute('stroke', '#fff');
-  shaft.setAttribute('stroke-width', '4');
-  shaft.setAttribute('stroke-linecap', 'round');
+  // Flipped lance direction.
+  drawSpear(g, pos.x + 12, pos.y + 9, pos.x - 14, pos.y - 12, 4);
+  return g;
+}
 
-  const tip = document.createElementNS('http://www.w3.org/2000/svg', 'polygon');
-  tip.setAttribute('points', `${pos.x + 16},${pos.y - 14} ${pos.x + 7},${pos.y - 12} ${pos.x + 13},${pos.y - 5}`);
-  tip.setAttribute('fill', '#fff');
+function renderCrossbowGlyph(pos) {
+  const g = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+  const swords = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+  swords.setAttribute('x', String(pos.x));
+  swords.setAttribute('y', String(pos.y + 3));
+  swords.setAttribute('class', 'unit-icon');
+  swords.style.fontSize = '16px';
+  swords.style.opacity = '0.9';
+  swords.textContent = '⚔️';
+  g.appendChild(swords);
 
-  g.appendChild(shaft);
-  g.appendChild(tip);
+  const bow = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+  bow.setAttribute('x', String(pos.x));
+  bow.setAttribute('y', String(pos.y - 1));
+  bow.setAttribute('class', 'unit-icon');
+  bow.style.fontSize = '17px';
+  bow.textContent = '🏹';
+  g.appendChild(bow);
+  return g;
+}
+
+function renderCavalryArcherGlyph(pos) {
+  const g = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+  const horse = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+  horse.setAttribute('x', String(pos.x));
+  horse.setAttribute('y', String(pos.y + 4));
+  horse.setAttribute('class', 'unit-icon');
+  horse.style.fontSize = '17px';
+  horse.textContent = '🐎';
+  g.appendChild(horse);
+
+  const bow = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+  bow.setAttribute('x', String(pos.x));
+  bow.setAttribute('y', String(pos.y - 9));
+  bow.setAttribute('class', 'unit-icon');
+  bow.style.fontSize = '14px';
+  bow.textContent = '🏹';
+  g.appendChild(bow);
   return g;
 }
 
 function renderUnitGlyph(unit, pos, group) {
-  const emoji = UNIT_DEFS[unit.type]?.emoji || '❓';
-  if (emoji === 'spear') {
-    group.appendChild(renderSpearmanGlyph(pos));
+  if (unit.type === 'pikeman') {
+    group.appendChild(renderPikemanGlyph(pos));
     return;
   }
   if (unit.type === 'lancer') {
     group.appendChild(renderLancerGlyph(pos));
+    return;
+  }
+  if (unit.type === 'crossbow') {
+    group.appendChild(renderCrossbowGlyph(pos));
+    return;
+  }
+  if (unit.type === 'cavalry_archer') {
+    group.appendChild(renderCavalryArcherGlyph(pos));
+    return;
+  }
+  const emoji = UNIT_DEFS[unit.type]?.emoji || '❓';
+  if (emoji === 'spear') {
+    group.appendChild(renderSpearmanGlyph(pos));
     return;
   }
   const icon = document.createElementNS('http://www.w3.org/2000/svg', 'text');
@@ -996,6 +1138,8 @@ function renderUnitGlyph(unit, pos, group) {
 function render(logs = []) {
   board.innerHTML = '';
   const targets = selectedKey ? new Set(getTargets(selectedKey)) : new Set();
+  const activeFocus = resourceHover || resourceFocus;
+  const focusedKeys = activeFocus ? getResourceContributors(currentPlayer, activeFocus.resource, activeFocus.mode) : null;
 
   const globalMini = [];
   for (let mq = -86; mq <= 86; mq += 1) {
@@ -1005,25 +1149,26 @@ function render(logs = []) {
     }
   }
 
-  const tileCenters = tiles.map((tile) => ({ tile, pos: axialToPixel(tile) }));
+  const tileCenters = tiles.map((tile) => ({ tile, pos: axialToPixel(tile), poly: polygonVertices(axialToPixel(tile), HEX_RADIUS) }));
   const tileMap = new Map(tiles.map((t) => [keyOf(t), t]));
 
-  // Dominant-bleed mosaic with map-edge cutoff: skip mini hexes too far from any map tile center.
+  // Dominant-bleed mosaic with map-edge cutoff and proportional background fade for overhanging mini-hexes.
   const mosaicGroup = document.createElementNS('http://www.w3.org/2000/svg', 'g');
   mosaicGroup.setAttribute('pointer-events', 'none');
   const edgeCutoff = (HEX_RADIUS * 1.2) ** 2;
-  const fadeStart = edgeCutoff * 0.72;
   const fadeEnd = edgeCutoff * 1.18;
 
   for (const mini of globalMini) {
     const candidates = [];
     let minDist = Infinity;
+    const nearTiles = [];
     for (const tc of tileCenters) {
       const dx = tc.pos.x - mini.pos.x;
       const dy = tc.pos.y - mini.pos.y;
       const d2 = dx * dx + dy * dy;
       if (d2 < minDist) minDist = d2;
       if (d2 <= fadeEnd) {
+        nearTiles.push(tc);
         const baseColor = tilePalettes[tc.tile.type][mini.idx] || '#888';
         const ownerTint = ownerColor(tc.tile.owner);
         const softenedOwnerTint = ownerTint ? blendHex(ownerTint, baseColor, 0.5) : null;
@@ -1033,10 +1178,23 @@ function render(logs = []) {
     }
     if (!candidates.length || minDist > fadeEnd) continue;
 
-    // Blend in board background near map edge so overhanging mini-hexes fade to black.
-    if (minDist > fadeStart) {
-      const t = Math.min(1, (minDist - fadeStart) / (fadeEnd - fadeStart));
-      candidates.push({ color: '#000000', weight: 0.25 + (2.4 * t) });
+    // Estimate mini-hex overhang ratio by sampling center + 6 vertices against nearby big-hex polygons.
+    const samplePts = [[mini.pos.x, mini.pos.y], ...polygonVertices(mini.pos, MINI_RADIUS)];
+    let insideCount = 0;
+    for (const [sx, sy] of samplePts) {
+      let insideAny = false;
+      for (const tc of nearTiles) {
+        if (pointInPolygon(sx, sy, tc.poly)) { insideAny = true; break; }
+      }
+      if (insideAny) insideCount += 1;
+    }
+    const insideRatio = insideCount / samplePts.length;
+    const overhang = Math.max(0, 1 - insideRatio);
+
+    if (overhang > 0) {
+      // More overhang => more background contribution, but avoid crushing to pure black.
+      const bgWeight = 0.45 * (overhang ** 1.5);
+      candidates.push({ color: '#0b1230', weight: bgWeight });
     }
 
     const miniPoly = document.createElementNS('http://www.w3.org/2000/svg', 'polygon');
@@ -1058,6 +1216,15 @@ function render(logs = []) {
     clickableHex.setAttribute('stroke', 'none');
     clickableHex.dataset.key = key;
     board.appendChild(clickableHex);
+
+    if (focusedKeys) {
+      const isFocus = focusedKeys.has(key);
+      const filterPoly = document.createElementNS('http://www.w3.org/2000/svg', 'polygon');
+      filterPoly.setAttribute('points', polygonPoints(pos, HEX_RADIUS));
+      filterPoly.setAttribute('fill', isFocus ? 'rgba(255,255,255,0.20)' : 'rgba(0,0,0,0.20)');
+      filterPoly.setAttribute('pointer-events', 'none');
+      board.appendChild(filterPoly);
+    }
 
     if (selectedKey === key || targets.has(key)) {
       const outline = document.createElementNS('http://www.w3.org/2000/svg', 'polygon');
@@ -1126,7 +1293,7 @@ function render(logs = []) {
 
     const prodBoost = productionQtyForTile(tile.owner, tile) - 1;
     if (tile.owner && prodBoost > 0) {
-      const fillerPool = ['✨', '✦', '·', '•', '✧', '◦'];
+      const fillerPool = BONUS_SYMBOLS[tile.type] || ['✨', '✦', '·', '•', '✧', '◦'];
       for (let i = 0; i < 6; i += 1) {
         const angle = (Math.PI / 180) * (60 * i);
         const sx = pos.x + (HEX_RADIUS * 0.68) * Math.cos(angle);
