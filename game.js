@@ -3,8 +3,6 @@ const statusText = document.getElementById('status');
 const resourcesEl = document.getElementById('resources');
 const selectionEl = document.getElementById('selection');
 const endTurnBtn = document.getElementById('end-turn');
-const mosaicResolutionEl = document.getElementById('mosaic-resolution');
-const mosaicResolutionValueEl = document.getElementById('mosaic-resolution-value');
 const modeMenuEl = document.getElementById('mode-menu');
 const start1pBtn = document.getElementById('start-1p');
 const start2pBtn = document.getElementById('start-2p');
@@ -16,15 +14,7 @@ const ORIGIN = { x: 980, y: 860 };
 const DIRECTIONS = [[1, 0], [1, -1], [0, -1], [-1, 0], [-1, 1], [0, 1]];
 const MAP_RADIUS = 6; // 127 tiles
 const SOLO_START_RADIUS = 2; // 19 tiles
-const MOSAIC_PRESETS = [
-  { name: 'Solid', miniRadius: null },
-  { name: 'Coarse', miniRadius: 14 },
-  { name: 'Balanced', miniRadius: 10 },
-  { name: 'Medium', miniRadius: 8 },
-  { name: 'Fine', miniRadius: 6 },
-  { name: 'Ultra', miniRadius: 5.2 },
-];
-let mosaicResolution = 2;
+const ULTRA_MOSAIC = { name: 'Ultra', miniRadius: 5.2 };
 
 // Spawn distribution from chained percentages:
 // 60% forest; 60% of remainder pasture; 60% of remainder farm; 60% of remainder homestead.
@@ -1573,7 +1563,7 @@ function render(logs = []) {
   const edgeCutoff = (HEX_RADIUS * 1.2) ** 2;
   const fadeEnd = edgeCutoff * 1.18;
 
-  const preset = MOSAIC_PRESETS[mosaicResolution] || MOSAIC_PRESETS[3];
+  const preset = ULTRA_MOSAIC;
   if (!preset.miniRadius) {
     for (const tc of tileCenters) {
       const solidPoly = document.createElementNS('http://www.w3.org/2000/svg', 'polygon');
@@ -1593,11 +1583,19 @@ function render(logs = []) {
     }
   } else {
     const miniRadius = preset.miniRadius;
-    const maxTileDist = tiles.reduce((acc, t) => Math.max(acc, cubeDistance({ q: 0, r: 0 }, t)), 0);
-    const gridRange = Math.min(90, Math.ceil((maxTileDist + 2) * (HEX_RADIUS / miniRadius) * 2.2));
+    const minQ = Math.min(...tiles.map((t) => t.q));
+    const maxQ = Math.max(...tiles.map((t) => t.q));
+    const minR = Math.min(...tiles.map((t) => t.r));
+    const maxR = Math.max(...tiles.map((t) => t.r));
+    const pad = 8;
+    const qStart = Math.floor((minQ - pad) * (HEX_RADIUS / miniRadius));
+    const qEnd = Math.ceil((maxQ + pad) * (HEX_RADIUS / miniRadius));
+    const rStart = Math.floor((minR - pad) * (HEX_RADIUS / miniRadius));
+    const rEnd = Math.ceil((maxR + pad) * (HEX_RADIUS / miniRadius));
+
     const globalMini = [];
-    for (let mq = -gridRange; mq <= gridRange; mq += 1) {
-      for (let mr = -gridRange; mr <= gridRange; mr += 1) {
+    for (let mq = qStart; mq <= qEnd; mq += 1) {
+      for (let mr = rStart; mr <= rEnd; mr += 1) {
         const miniPos = axialToPixel({ q: mq, r: mr }, miniRadius);
         globalMini.push({ mq, mr, pos: miniPos, idx: ((mq - mr) % 3 + 3) % 3 });
       }
@@ -1888,13 +1886,5 @@ endTurnBtn.addEventListener('click', () => {
 start1pBtn?.addEventListener('click', () => startGame('solo'));
 start2pBtn?.addEventListener('click', () => startGame('duo'));
 startEasyAiBtn?.addEventListener('click', () => startGame('easy-ai'));
-
-if (mosaicResolutionValueEl) mosaicResolutionValueEl.textContent = MOSAIC_PRESETS[mosaicResolution]?.name || 'Balanced';
-mosaicResolutionEl?.addEventListener('input', () => {
-  const next = Number(mosaicResolutionEl.value);
-  mosaicResolution = Number.isFinite(next) ? Math.max(0, Math.min(MOSAIC_PRESETS.length - 1, Math.round(next))) : 2;
-  if (mosaicResolutionValueEl) mosaicResolutionValueEl.textContent = MOSAIC_PRESETS[mosaicResolution]?.name || 'Balanced';
-  render();
-});
 
 render();
