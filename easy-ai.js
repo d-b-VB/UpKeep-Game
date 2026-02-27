@@ -45,28 +45,83 @@
     return score;
   }
 
+  function chooseBestTrain(state) {
+    const trains = state.legalTrains || [];
+    if (!trains.length) return null;
+    const priority = {
+      homestead: 10,
+      village: 9,
+      town: 8,
+      city: 7,
+      manor: 6,
+      estate: 5,
+      outpost: 6,
+      stronghold: 5,
+      keep: 4,
+      palace: 4,
+    };
+
+    const best = [...trains].sort((a, b) => {
+      const pa = priority[a.tileType] || 0;
+      const pb = priority[b.tileType] || 0;
+      if (pa !== pb) return pb - pa;
+      return a.unitType.localeCompare(b.unitType);
+    })[0];
+
+    return { type: 'train', key: best.key, unitType: best.unitType };
+  }
+
+  function chooseBestUpgrade(state) {
+    const upgrades = state.legalTileUpgrades || [];
+    if (!upgrades.length) return null;
+
+    const weight = {
+      forest: 2,
+      pasture: 2,
+      farm: 3,
+      homestead: 4,
+      village: 6,
+      town: 7,
+      manor: 6,
+      estate: 7,
+      outpost: 5,
+      stronghold: 6,
+    };
+
+    const best = [...upgrades].sort((a, b) => {
+      const wa = (weight[a.toType] || 0) - (weight[a.fromType] || 0);
+      const wb = (weight[b.toType] || 0) - (weight[b.fromType] || 0);
+      if (wa !== wb) return wb - wa;
+      return a.toType.localeCompare(b.toType);
+    })[0];
+
+    return { type: 'upgrade-tile', key: best.key, toType: best.toType };
+  }
+
   function chooseAction(state) {
     if (!state || state.currentPlayer !== 'red') return null;
 
     const ownerMap = tileOwnerByKey(state.tiles || []);
     const unitMap = unitByKey(state.units || []);
 
-    let bestMove = null;
-    let bestMoveScore = -Infinity;
-
+    const moveActions = [];
     for (const unit of state.units || []) {
       if (unit.player !== 'red') continue;
       const moves = (state.legalMovesByUnit && state.legalMovesByUnit[unit.key]) || [];
       for (const toKey of moves) {
         const s = scoreDestination(unit.key, toKey, state, unitMap, ownerMap);
-        if (s > bestMoveScore) {
-          bestMoveScore = s;
-          bestMove = { type: 'move', from: unit.key, to: toKey };
-        }
+        moveActions.push({ type: 'move', from: unit.key, to: toKey, score: s });
       }
     }
 
-    if (bestMove) return bestMove;
+    moveActions.sort((a, b) => b.score - a.score);
+    if (moveActions.length) return moveActions[0];
+
+    const trainAction = chooseBestTrain(state);
+    if (trainAction) return trainAction;
+
+    const upgradeAction = chooseBestUpgrade(state);
+    if (upgradeAction) return upgradeAction;
 
     for (const unit of state.units || []) {
       if (unit.player !== 'red') continue;

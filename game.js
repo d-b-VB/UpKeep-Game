@@ -44,11 +44,11 @@ const tilePalettes = {
   farm: ['#cde6b8', '#ffd54f', '#cfb14f'],
   homestead: ['#bcaaa4', '#8d6e63', '#a1887f'],
   village: ['#d8b49c', '#c97b63', '#f1cf9d'],
-  town: ['#b9c8d9', '#d5b6c2', '#d8e3f0'],
+  town: ['#afc1d6', '#d2b1bd', '#e6d2ac'],
   city: ['#e3e3e3', '#cdd5db', '#a9b7c0'],
   manor: ['#c3ab8e', '#8a5f44', '#e0ceb8'],
   estate: ['#d5d9f6', '#b8c2f6', '#9eaaf5'],
-  palace: ['#f3e5ab', '#e8d26e', '#f0ce5a'],
+  palace: ['#201a2b', '#e6e6f0', '#7b57c6'],
   outpost: ['#cbbeb5', '#a88f86', '#8f7b72'],
   stronghold: ['#b0b0b0', '#8f8f8f', '#cacaca'],
   keep: ['#d0c2ac', '#b6a58b', '#988a72'],
@@ -431,9 +431,9 @@ function setupDuoGame() {
   resetTurnActions('red');
 }
 
-function revealSoloTiles() {
-  if (gameMode !== 'solo') return;
-  const unitsNow = [...units.entries()].filter(([, u]) => u.player === 'blue');
+function revealExpandingTiles() {
+  if (gameMode !== 'solo' && gameMode !== 'easy-ai') return;
+  const unitsNow = [...units.entries()].filter(([, u]) => (gameMode === 'solo' ? u.player === 'blue' : true));
   for (const [key, unit] of unitsNow) {
     const from = getCellByKey(key);
     const movement = movePointsFor(unit.type);
@@ -454,7 +454,7 @@ function setupSoloGame() {
   units = new Map();
   placeStart(0, 0, 'blue');
   resetTurnActions('blue');
-  revealSoloTiles();
+  revealExpandingTiles();
 }
 
 function startGame(mode) {
@@ -487,6 +487,33 @@ function startGame(mode) {
 }
 
 function buildEasyAiState() {
+  const legalTrains = [];
+  const legalTileUpgrades = [];
+
+  for (const tile of tiles) {
+    const key = keyOf(tile);
+    if (tile.owner !== currentPlayer) continue;
+
+    if (!units.get(key)) {
+      const trainable = TRAIN_AT[tile.type] || [];
+      for (const unitType of trainable) {
+        if (canSupportUnitSpawn(currentPlayer, unitType, key)) {
+          legalTrains.push({ key, unitType, tileType: tile.type });
+        }
+      }
+    }
+
+    const unit = units.get(key);
+    if (unit && unit.player === currentPlayer && UNIT_DEFS[unit.type]?.terrainUpgrader && unit.actionsLeft > 0) {
+      const upgrades = upgradePaths[tile.type] || [];
+      for (const toType of upgrades) {
+        if (canSupportTileUpgrade(currentPlayer, tile.type, toType)) {
+          legalTileUpgrades.push({ key, fromType: tile.type, toType, unitType: unit.type });
+        }
+      }
+    }
+  }
+
   return {
     currentPlayer,
     cells: cells.map((c) => ({ ...c })),
@@ -502,6 +529,8 @@ function buildEasyAiState() {
         .filter(([, unit]) => unit.player === currentPlayer)
         .map(([fromKey]) => [fromKey, getAttackTargets(fromKey)]),
     ),
+    legalTrains,
+    legalTileUpgrades,
   };
 }
 
@@ -513,22 +542,40 @@ function runEasyAiTurn() {
     return;
   }
 
-  const state = buildEasyAiState();
-  const action = planner.chooseAction(state);
-  if (!action) {
-    lastDebug = 'Easy AI: no action available; passing turn.';
-  } else if (action.type === 'move' && canMove(action.from, action.to)) {
-    moveUnit(action.from, action.to);
-  } else if (action.type === 'shoot' && canRangedAttack(action.from, action.to)) {
-    rangedAttack(action.from, action.to);
-  } else {
-    lastDebug = 'Easy AI chose an invalid action; passing turn.';
+  let acted = false;
+  for (let i = 0; i < 4; i += 1) {
+    const state = buildEasyAiState();
+    const action = planner.chooseAction(state);
+    if (!action) break;
+
+    if (action.type === 'move' && canMove(action.from, action.to)) {
+      moveUnit(action.from, action.to);
+      acted = true;
+      continue;
+    }
+    if (action.type === 'shoot' && canRangedAttack(action.from, action.to)) {
+      rangedAttack(action.from, action.to);
+      acted = true;
+      continue;
+    }
+    if (action.type === 'train' && trainUnitAt(action.key, action.unitType)) {
+      acted = true;
+      continue;
+    }
+    if (action.type === 'upgrade-tile' && upgradeTileAt(action.key, action.toType)) {
+      acted = true;
+      continue;
+    }
+    break;
   }
+
+  if (!acted) lastDebug = 'Easy AI: no action available; passing turn.';
 
   const logs = [...enforceShortages('blue'), ...enforceShortages('red')];
   currentPlayer = 'blue';
   resetTurnActions('blue');
   selectedKey = null;
+  revealExpandingTiles();
   render(logs);
 }
 
@@ -946,8 +993,6 @@ function canRangedAttack(fromKey, toKey) {
   // Rangehand can shoot only before moving.
   if (movedThisTurn && attacker.type === 'rangehand') return false;
 
-  // Hunter/Longbow/Cavalry Archer cannot shoot into closed terrain after moving.
-  if (movedThisTurn && ['hunter', 'longbow', 'cavalry_archer'].includes(attacker.type) && isTileClosedFor(attacker.player, toKey)) return false;
 
   const from = getCellByKey(fromKey);
   const to = getCellByKey(toKey);
@@ -971,7 +1016,6 @@ function explainAttackFailure(fromKey, toKey) {
   if (!canUseLongWeaponFrom(fromKey, attacker.type)) return `Attack invalid: ${attacker.type} cannot fire from closed terrain.`;
   const movedThisTurn = attacker.movesLeft < movePointsFor(attacker.type);
   if (movedThisTurn && attacker.type === 'rangehand') return 'Attack invalid: rangehand cannot attack after moving.';
-  if (movedThisTurn && ['hunter', 'longbow', 'cavalry_archer'].includes(attacker.type) && isTileClosedFor(attacker.player, toKey)) return `Attack invalid: ${attacker.type} cannot shoot into closed terrain after moving.`;
   const from = getCellByKey(fromKey);
   const to = getCellByKey(toKey);
   const dist = cubeDistance(from, to);
@@ -1102,50 +1146,67 @@ function moveUnit(fromKey, toKey) {
   }
 
   lastDebug = `Move ok: ${unit.type} moved to ${toKey}, ${claimText}. ${warning}`.trim();
-  revealSoloTiles();
+  revealExpandingTiles();
 }
 
-function upgradeSelectedTile(toType) {
-  if (!selectedKey) return;
-  const tile = getTile(selectedKey);
-  const unit = units.get(selectedKey);
-  if (!tile || !unit) return;
-  if (unit.player !== currentPlayer || tile.owner !== currentPlayer) return;
+function upgradeTileAt(key, toType) {
+  const tile = getTile(key);
+  const unit = units.get(key);
+  if (!tile || !unit) return false;
+  if (unit.player !== currentPlayer || tile.owner !== currentPlayer) return false;
   if (!UNIT_DEFS[unit.type]?.terrainUpgrader) {
     lastDebug = `${unit.type} cannot upgrade terrain.`;
-    return;
+    return false;
   }
   if (unit.actionsLeft <= 0) {
     lastDebug = `${unit.type} has no actions left.`;
-    return;
+    return false;
   }
 
   if (!canSupportTileUpgrade(currentPlayer, tile.type, toType)) {
     lastDebug = `Upgrade blocked: ${toType} upkeep is not currently supportable.`;
-    return;
+    return false;
   }
 
   unit.actionsLeft -= 1;
   tile.type = toType;
   tile.symbols = buildSymbols(toType);
-  lastDebug = `Upgrade ok: ${selectedKey} -> ${toType}.`;
+  lastDebug = `Upgrade ok: ${key} -> ${toType}.`;
   render();
+  return true;
+}
+
+function upgradeSelectedTile(toType) {
+  if (!selectedKey) return;
+  upgradeTileAt(selectedKey, toType);
+}
+
+function canSupportUnitSpawn(player, unitType, key) {
+  const eco = computeEconomy(player);
+  const tile = getTile(key);
+  if (!tile) return false;
+  if (freeUnitCondition[unitType]?.(tile)) return true;
+  const need = unitUpkeep[unitType] || {};
+  for (const [res, amt] of Object.entries(need)) {
+    const afterUse = eco.used[res] + amt;
+    if (eco.produced[res] < afterUse) return false;
+  }
+  return true;
 }
 
 function trainUnitAt(key, unitType) {
   const tile = getTile(key);
-  if (!tile || tile.owner !== currentPlayer || units.get(key)) return;
+  if (!tile || tile.owner !== currentPlayer || units.get(key)) return false;
 
-  if (!isActionSustainable(currentPlayer, (_tSnap, uSnap) => {
-    uSnap.set(key, { player: currentPlayer, type: unitType, movesLeft: 0, actionsLeft: 0 });
-  })) {
-    lastDebug = `Training blocked: ${unitType} would create shortage for ${currentPlayer}.`;
-    return;
+  if (!canSupportUnitSpawn(currentPlayer, unitType, key)) {
+    lastDebug = `Training blocked: ${unitType} upkeep is not currently supportable.`;
+    return false;
   }
 
   units.set(key, { player: currentPlayer, type: unitType, movesLeft: 0, actionsLeft: 0 });
   lastDebug = `Training ok: ${unitType} at ${key}.`;
   render();
+  return true;
 }
 
 function upgradeUnitAt(key, newType) {
@@ -1775,7 +1836,7 @@ endTurnBtn.addEventListener('click', () => {
 
   currentPlayer = gameMode === 'solo' ? 'blue' : (currentPlayer === 'blue' ? 'red' : 'blue');
   resetTurnActions(currentPlayer);
-  revealSoloTiles();
+  revealExpandingTiles();
   selectedKey = null;
   lastDebug = 'Turn advanced. Economy table reflects continuous produced/used/available flow';
   render(logs);
