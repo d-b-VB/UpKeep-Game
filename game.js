@@ -8,6 +8,7 @@ const mosaicResolutionValueEl = document.getElementById('mosaic-resolution-value
 const modeMenuEl = document.getElementById('mode-menu');
 const start1pBtn = document.getElementById('start-1p');
 const start2pBtn = document.getElementById('start-2p');
+const startEasyAiBtn = document.getElementById('start-easy-ai');
 
 const HEX_RADIUS = 42;
 const MINI_RADIUS = 8;
@@ -43,9 +44,9 @@ const tilePalettes = {
   farm: ['#cde6b8', '#ffd54f', '#cfb14f'],
   homestead: ['#bcaaa4', '#8d6e63', '#a1887f'],
   village: ['#d8b49c', '#c97b63', '#f1cf9d'],
-  town: ['#a9b7c6', '#e89a9a', '#ffd57d'],
+  town: ['#b9c8d9', '#d5b6c2', '#d8e3f0'],
   city: ['#e3e3e3', '#cdd5db', '#a9b7c0'],
-  manor: ['#d7c7af', '#b79d86', '#cbb8a0'],
+  manor: ['#c3ab8e', '#8a5f44', '#e0ceb8'],
   estate: ['#d5d9f6', '#b8c2f6', '#9eaaf5'],
   palace: ['#f3e5ab', '#e8d26e', '#f0ce5a'],
   outpost: ['#cbbeb5', '#a88f86', '#8f7b72'],
@@ -78,7 +79,7 @@ const UNIT_DEFS = {
   architect: { emoji: '📐', cls: 'worker', terrainUpgrader: true },
   rangehand: { emoji: '🪃', cls: 'archer', terrainUpgrader: false },
   surveyor: { emoji: '🧭', cls: 'defworker', terrainUpgrader: true },
-  constable: { emoji: '🪪', cls: 'defworker', terrainUpgrader: true },
+  constable: { emoji: '♣️', cls: 'defworker', terrainUpgrader: true },
 
   spearman: { emoji: 'spear', cls: 'infantry', terrainUpgrader: false },
   swordsman: { emoji: '⚔️', cls: 'infantry', terrainUpgrader: false },
@@ -93,7 +94,7 @@ const UNIT_DEFS = {
   horseman: { emoji: '🐎', cls: 'cavalry', terrainUpgrader: false },
   lancer: { emoji: '🗡️', cls: 'cavalry', terrainUpgrader: false },
   cavalry_archer: { emoji: '🐎🏹', cls: 'cavalry', terrainUpgrader: false },
-  royal_knight: { emoji: '🐴👑', cls: 'cavalry', terrainUpgrader: false },
+  royal_knight: { emoji: '🐴', cls: 'cavalry', terrainUpgrader: false },
 };
 
 const unitUpkeep = {
@@ -254,10 +255,14 @@ function mixHexWeighted(entries) {
 function colorForTileShard(tile, shardIdx = 1) {
   const palette = tilePalettes[tile.type] || ['#888', '#888', '#888'];
   const baseColor = palette[shardIdx] || palette[1] || palette[0] || '#888';
-  const ownerTint = ownerColor(tile.owner);
-  if (!ownerTint) return baseColor;
-  const softenedOwnerTint = blendHex(ownerTint, baseColor, 0.5);
-  return shardIdx === 2 ? softenedOwnerTint : baseColor;
+  return baseColor;
+}
+
+function accentColorForTileShard(tile, shardIdx = 1) {
+  if (shardIdx !== 2 || !tile.owner) return null;
+  const palette = tilePalettes[tile.type] || ['#888', '#888', '#888'];
+  const baseColor = palette[2] || palette[1] || palette[0] || '#888';
+  return blendHex(ownerColor(tile.owner), baseColor, 0.5);
 }
 
 function productionQtyForTile(player, tile, tileSnapshot = tiles, unitSnapshot = units) {
@@ -379,7 +384,7 @@ let cells = [];
 let cellKeys = new Set();
 let tiles = [];
 let units = new Map();
-let gameMode = null; // 'solo' | 'duo'
+let gameMode = null; // 'solo' | 'duo' | 'easy-ai'
 let startInProgress = false;
 
 function makeTile(cell) {
@@ -458,7 +463,9 @@ function startGame(mode) {
 
   if (start1pBtn) start1pBtn.disabled = true;
   if (start2pBtn) start2pBtn.disabled = true;
-  if (statusText) statusText.textContent = `Starting ${mode === 'solo' ? '1-player' : '2-player'} game...`;
+  if (startEasyAiBtn) startEasyAiBtn.disabled = true;
+  const label = mode === 'solo' ? '1-player' : mode === 'easy-ai' ? 'easy AI' : '2-player';
+  if (statusText) statusText.textContent = `Starting ${label} game...`;
   if (modeMenuEl) modeMenuEl.classList.add('hidden');
 
   // Let the menu hide paint first so startup work doesn't look like a frozen click.
@@ -466,13 +473,63 @@ function startGame(mode) {
   gameMode = mode;
   currentPlayer = 'blue';
   selectedKey = null;
-  lastDebug = mode === 'solo' ? 'Solo mode: new tiles reveal as units approach them.' : '';
+  lastDebug = mode === 'solo'
+    ? 'Solo mode: new tiles reveal as units approach them.'
+    : mode === 'easy-ai'
+      ? 'Easy AI mode: red side is controlled by heuristic AI.'
+      : '';
   resourceFocus = null;
   resourceHover = null;
   if (mode === 'solo') setupSoloGame(); else setupDuoGame();
   render();
   startInProgress = false;
   });
+}
+
+function buildEasyAiState() {
+  return {
+    currentPlayer,
+    cells: cells.map((c) => ({ ...c })),
+    tiles: tiles.map((t) => ({ ...t, key: keyOf(t) })),
+    units: [...units.entries()].map(([key, unit]) => ({ key, ...unit })),
+    legalMovesByUnit: Object.fromEntries(
+      [...units.entries()]
+        .filter(([, unit]) => unit.player === currentPlayer)
+        .map(([fromKey]) => [fromKey, getMoveTargets(fromKey)]),
+    ),
+    legalShotsByUnit: Object.fromEntries(
+      [...units.entries()]
+        .filter(([, unit]) => unit.player === currentPlayer)
+        .map(([fromKey]) => [fromKey, getAttackTargets(fromKey)]),
+    ),
+  };
+}
+
+function runEasyAiTurn() {
+  if (gameMode !== 'easy-ai' || currentPlayer !== 'red') return;
+  const planner = window.UpKeepEasyAI;
+  if (!planner?.chooseAction) {
+    lastDebug = 'Easy AI unavailable: planner file missing.';
+    return;
+  }
+
+  const state = buildEasyAiState();
+  const action = planner.chooseAction(state);
+  if (!action) {
+    lastDebug = 'Easy AI: no action available; passing turn.';
+  } else if (action.type === 'move' && canMove(action.from, action.to)) {
+    moveUnit(action.from, action.to);
+  } else if (action.type === 'shoot' && canRangedAttack(action.from, action.to)) {
+    rangedAttack(action.from, action.to);
+  } else {
+    lastDebug = 'Easy AI chose an invalid action; passing turn.';
+  }
+
+  const logs = [...enforceShortages('blue'), ...enforceShortages('red')];
+  currentPlayer = 'blue';
+  resetTurnActions('blue');
+  selectedKey = null;
+  render(logs);
 }
 
 let currentPlayer = 'blue';
@@ -886,6 +943,9 @@ function canRangedAttack(fromKey, toKey) {
 
   const movedThisTurn = attacker.movesLeft < movePointsFor(attacker.type);
 
+  // Rangehand can shoot only before moving.
+  if (movedThisTurn && attacker.type === 'rangehand') return false;
+
   // Hunter/Longbow/Cavalry Archer cannot shoot into closed terrain after moving.
   if (movedThisTurn && ['hunter', 'longbow', 'cavalry_archer'].includes(attacker.type) && isTileClosedFor(attacker.player, toKey)) return false;
 
@@ -910,6 +970,7 @@ function explainAttackFailure(fromKey, toKey) {
   if (target.player === currentPlayer) return 'Attack invalid: cannot target your own unit.';
   if (!canUseLongWeaponFrom(fromKey, attacker.type)) return `Attack invalid: ${attacker.type} cannot fire from closed terrain.`;
   const movedThisTurn = attacker.movesLeft < movePointsFor(attacker.type);
+  if (movedThisTurn && attacker.type === 'rangehand') return 'Attack invalid: rangehand cannot attack after moving.';
   if (movedThisTurn && ['hunter', 'longbow', 'cavalry_archer'].includes(attacker.type) && isTileClosedFor(attacker.player, toKey)) return `Attack invalid: ${attacker.type} cannot shoot into closed terrain after moving.`;
   const from = getCellByKey(fromKey);
   const to = getCellByKey(toKey);
@@ -1328,6 +1389,29 @@ function renderCavalryArcherGlyph(pos) {
   return g;
 }
 
+function renderRoyalKnightGlyph(pos) {
+  const g = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+  const horse = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+  horse.setAttribute('x', String(pos.x));
+  horse.setAttribute('y', String(pos.y + 2));
+  horse.setAttribute('text-anchor', 'middle');
+  horse.setAttribute('dominant-baseline', 'middle');
+  horse.setAttribute('class', 'unit-icon');
+  horse.textContent = '🐴';
+  g.appendChild(horse);
+
+  const crown = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+  crown.setAttribute('x', String(pos.x + 1));
+  crown.setAttribute('y', String(pos.y - 8));
+  crown.setAttribute('text-anchor', 'middle');
+  crown.setAttribute('dominant-baseline', 'middle');
+  crown.setAttribute('class', 'unit-icon');
+  crown.style.fontSize = '12px';
+  crown.textContent = '👑';
+  g.appendChild(crown);
+  return g;
+}
+
 function renderUnitGlyph(unit, pos, group) {
   if (unit.type === 'pikeman') {
     group.appendChild(renderPikemanGlyph(pos));
@@ -1347,6 +1431,10 @@ function renderUnitGlyph(unit, pos, group) {
   }
   if (unit.type === 'cavalry_archer') {
     group.appendChild(renderCavalryArcherGlyph(pos));
+    return;
+  }
+  if (unit.type === 'royal_knight') {
+    group.appendChild(renderRoyalKnightGlyph(pos));
     return;
   }
   const emoji = UNIT_DEFS[unit.type]?.emoji || '❓';
@@ -1389,6 +1477,15 @@ function render(logs = []) {
       solidPoly.setAttribute('fill', colorForTileShard(tc.tile, 1));
       solidPoly.setAttribute('stroke', 'none');
       mosaicGroup.appendChild(solidPoly);
+
+      if (tc.tile.owner) {
+        const accent = document.createElementNS('http://www.w3.org/2000/svg', 'polygon');
+        accent.setAttribute('points', polygonPoints(tc.pos, HEX_RADIUS * 0.36));
+        accent.setAttribute('fill', accentColorForTileShard(tc.tile, 2) || '#ffffff');
+        accent.setAttribute('stroke', 'none');
+        accent.setAttribute('opacity', '0.95');
+        mosaicGroup.appendChild(accent);
+      }
     }
   } else {
     const miniRadius = preset.miniRadius;
@@ -1453,6 +1550,15 @@ function render(logs = []) {
       miniPoly.setAttribute('fill', mixHexWeighted(candidates));
       miniPoly.setAttribute('stroke', 'none');
       mosaicGroup.appendChild(miniPoly);
+
+      if (mini.idx === 2 && primaryTile.tile.owner) {
+        const accent = document.createElementNS('http://www.w3.org/2000/svg', 'polygon');
+        accent.setAttribute('points', polygonPoints(mini.pos, miniRadius * 0.5));
+        accent.setAttribute('fill', accentColorForTileShard(primaryTile.tile, 2) || '#ffffff');
+        accent.setAttribute('stroke', 'none');
+        accent.setAttribute('opacity', '0.95');
+        mosaicGroup.appendChild(accent);
+      }
     }
   }
   board.appendChild(mosaicGroup);
@@ -1534,7 +1640,7 @@ function render(logs = []) {
       text.setAttribute('text-anchor', 'middle');
       text.setAttribute('class', 'symbol');
       if (houses.has(symbol)) {
-        text.style.fontSize = '15px';
+        text.style.fontSize = '19.5px';
         text.style.stroke = 'rgba(10,14,28,0.95)';
         text.style.strokeWidth = '1.6px';
         text.style.paintOrder = 'stroke';
@@ -1647,9 +1753,26 @@ board.addEventListener('click', (event) => {
 });
 
 endTurnBtn.addEventListener('click', () => {
+  if (gameMode === 'easy-ai' && currentPlayer === 'red') {
+    lastDebug = 'Wait for AI to complete its turn.';
+    render();
+    return;
+  }
+
   const logs = gameMode === 'solo'
     ? [...enforceShortages('blue')]
     : [...enforceShortages('blue'), ...enforceShortages('red')];
+
+  if (gameMode === 'easy-ai') {
+    currentPlayer = 'red';
+    resetTurnActions('red');
+    selectedKey = null;
+    lastDebug = 'AI is thinking...';
+    render(logs);
+    window.setTimeout(runEasyAiTurn, 180);
+    return;
+  }
+
   currentPlayer = gameMode === 'solo' ? 'blue' : (currentPlayer === 'blue' ? 'red' : 'blue');
   resetTurnActions(currentPlayer);
   revealSoloTiles();
@@ -1660,6 +1783,7 @@ endTurnBtn.addEventListener('click', () => {
 
 start1pBtn?.addEventListener('click', () => startGame('solo'));
 start2pBtn?.addEventListener('click', () => startGame('duo'));
+startEasyAiBtn?.addEventListener('click', () => startGame('easy-ai'));
 
 if (mosaicResolutionValueEl) mosaicResolutionValueEl.textContent = MOSAIC_PRESETS[mosaicResolution]?.name || 'Balanced';
 mosaicResolutionEl?.addEventListener('input', () => {

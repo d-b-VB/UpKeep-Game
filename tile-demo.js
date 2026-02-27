@@ -6,9 +6,9 @@ const tilePalettes = {
   farm: ['#cde6b8', '#ffd54f', '#cfb14f'],
   homestead: ['#bcaaa4', '#8d6e63', '#a1887f'],
   village: ['#d8b49c', '#c97b63', '#f1cf9d'],
-  town: ['#a9b7c6', '#e89a9a', '#ffd57d'],
+  town: ['#b9c8d9', '#d5b6c2', '#d8e3f0'],
   city: ['#e3e3e3', '#cdd5db', '#a9b7c0'],
-  manor: ['#d7c7af', '#b79d86', '#cbb8a0'],
+  manor: ['#c3ab8e', '#8a5f44', '#e0ceb8'],
   estate: ['#d5d9f6', '#b8c2f6', '#9eaaf5'],
   palace: ['#f3e5ab', '#e8d26e', '#f0ce5a'],
   outpost: ['#cbbeb5', '#a88f86', '#8f7b72'],
@@ -72,12 +72,20 @@ function drawTile(type, owner, cx, cy) {
   positions.forEach(([x, y], idx) => {
     const base = palette[idx % 3];
     const tint = ownerColor(owner);
-    const fill = idx % 3 === 2 && tint ? blendHex(tint, base, 0.5) : base;
+    const fill = base;
     append('polygon', {
       points: hexPoints(x, y, 8),
       fill,
       stroke: 'none',
     }, g);
+
+    if (idx % 3 === 2 && tint) {
+      append('polygon', {
+        points: hexPoints(x, y, 4),
+        fill: blendHex(tint, base, 0.5),
+        stroke: 'none',
+      }, g);
+    }
   });
 }
 
