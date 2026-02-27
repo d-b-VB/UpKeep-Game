@@ -26,17 +26,44 @@ const MOSAIC_PRESETS = [
 ];
 let mosaicResolution = 2;
 
-const weightedTypes = [
-  ...Array(64).fill('forest'),
-  ...Array(32).fill('pasture'),
-  ...Array(16).fill('farm'),
-  ...Array(8).fill('homestead'),
-  ...Array(4).fill('village'),
-  ...Array(2).fill('town'),
-  ...Array(1).fill('city'),
-  ...Array(1).fill('manor'),
-  ...Array(1).fill('outpost'),
-];
+// Spawn distribution from chained percentages:
+// 60% forest; 60% of remainder pasture; 60% of remainder farm; 60% of remainder homestead.
+// Remaining pool is split 50% settlement line, 25% great-house line, 25% fortification line.
+// Within each line: 60% level-1, 60% of remainder level-2, remainder level-3.
+// Final exact percentages:
+// forest 60.0000
+// pasture 24.0000
+// farm 9.6000
+// homestead 3.8400
+// village 0.7680, town 0.3072, city 0.2048
+// manor 0.3840, estate 0.1536, palace 0.1024
+// outpost 0.3840, stronghold 0.1536, keep 0.1024
+const spawnPercentages = {
+  forest: 60.0000,
+  pasture: 24.0000,
+  farm: 9.6000,
+  homestead: 3.8400,
+  village: 0.7680,
+  town: 0.3072,
+  city: 0.2048,
+  manor: 0.3840,
+  estate: 0.1536,
+  palace: 0.1024,
+  outpost: 0.3840,
+  stronghold: 0.1536,
+  keep: 0.1024,
+};
+
+function buildWeightedTypes(percentages, scale = 10000) {
+  const out = [];
+  for (const [type, pct] of Object.entries(percentages)) {
+    const count = Math.max(1, Math.round((pct / 100) * scale));
+    for (let i = 0; i < count; i += 1) out.push(type);
+  }
+  return out;
+}
+
+const weightedTypes = buildWeightedTypes(spawnPercentages);
 
 const tilePalettes = {
   forest: ['#1b5e20', '#2e7d32', '#6d4c41'],
@@ -434,11 +461,12 @@ function setupDuoGame() {
 function revealExpandingTiles() {
   if (gameMode !== 'solo' && gameMode !== 'easy-ai') return;
   const unitsNow = [...units.entries()].filter(([, u]) => (gameMode === 'solo' ? u.player === 'blue' : true));
+  const edgeBuffer = gameMode === 'easy-ai' ? 3 : 0;
   for (const [key, unit] of unitsNow) {
     const from = getCellByKey(key);
     const movement = movePointsFor(unit.type);
     const range = isArcher(unit.type) ? archerRange(unit.type) : 1;
-    const interactRadius = Math.max(1, movement + range);
+    const interactRadius = Math.max(1, movement + range + edgeBuffer);
     for (let dq = -interactRadius; dq <= interactRadius; dq += 1) {
       for (let dr = Math.max(-interactRadius, -dq - interactRadius); dr <= Math.min(interactRadius, -dq + interactRadius); dr += 1) {
         ensureTile(from.q + dq, from.r + dr);
@@ -481,6 +509,7 @@ function startGame(mode) {
   resourceFocus = null;
   resourceHover = null;
   if (mode === 'solo') setupSoloGame(); else setupDuoGame();
+  if (mode === 'easy-ai') revealExpandingTiles();
   render();
   startInProgress = false;
   });
@@ -767,14 +796,27 @@ function adjacentKeys(key) {
     .filter((k) => cellKeys.has(k));
 }
 
-function terrainClosed(tileType) {
-  return ['forest', 'town', 'city', 'outpost', 'stronghold', 'keep'].includes(tileType);
+function terrainClosedForPlayer(tile, player) {
+  if (!tile) return true;
+  if (tile.type === 'forest') return true;
+
+  if (['town', 'city'].includes(tile.type)) {
+    // Settlements are closed only when enemy-owned.
+    return Boolean(tile.owner) && tile.owner !== player;
+  }
+
+  if (['outpost', 'stronghold', 'keep'].includes(tile.type)) {
+    // Fortifications are open to their owner, closed otherwise.
+    return tile.owner !== player;
+  }
+
+  return false;
 }
 
 function isTileClosedFor(player, key) {
   const tile = getTile(key);
   if (!tile) return true;
-  if (terrainClosed(tile.type)) return true;
+  if (terrainClosedForPlayer(tile, player)) return true;
 
   // Pikeman closes adjacent tiles for enemies only.
   for (const nKey of adjacentKeys(key)) {
@@ -1512,6 +1554,7 @@ function renderUnitGlyph(unit, pos, group) {
 }
 
 function render(logs = []) {
+  revealExpandingTiles();
   if (resourceHover) {
     const hoveredCell = document.querySelector('[data-resource-hover]:hover');
     if (!hoveredCell) resourceHover = null;
