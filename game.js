@@ -3,6 +3,9 @@ const statusText = document.getElementById('status');
 const resourcesEl = document.getElementById('resources');
 const selectionEl = document.getElementById('selection');
 const endTurnBtn = document.getElementById('end-turn');
+const zoomOutBtn = document.getElementById('zoom-out');
+const zoomResetBtn = document.getElementById('zoom-reset');
+const zoomInBtn = document.getElementById('zoom-in');
 const modeMenuEl = document.getElementById('mode-menu');
 const start1pBtn = document.getElementById('start-1p');
 const start2pBtn = document.getElementById('start-2p');
@@ -134,7 +137,7 @@ const freeUnitCondition = {
 
 function movePointsFor(unitType) {
   if (['horseman', 'lancer', 'cavalry_archer', 'royal_knight'].includes(unitType)) return 3;
-  if (unitType === 'surveyor') return 3;
+  if (unitType === 'surveyor') return 2;
   return 1;
 }
 
@@ -553,10 +556,44 @@ function buildEasyAiState() {
   };
 }
 
+function aiActionWouldCauseShortage(action, player = 'red') {
+  if (!action) return true;
+
+  if (action.type === 'move') {
+    if (!canMove(action.from, action.to)) return true;
+    const unit = units.get(action.from);
+    if (!unit) return true;
+
+    const nextMoves = isCavalry(unit.type) ? 0 : Math.max(0, unit.movesLeft - 1);
+    return Boolean(moveEconomyWarning(action.from, action.to, nextMoves));
+  }
+
+  if (action.type === 'shoot') {
+    if (!canRangedAttack(action.from, action.to)) return true;
+    return economyDeficits(player).length > 0;
+  }
+
+  if (action.type === 'train') {
+    if (!getTile(action.key) || units.get(action.key)) return true;
+    return !isActionSustainable(player, (_tSnap, uSnap) => {
+      uSnap.set(action.key, { player, type: action.unitType, movesLeft: 0, actionsLeft: 0 });
+    });
+  }
+
+  if (action.type === 'upgrade-tile') {
+    return !isActionSustainable(player, (tSnap) => {
+      const tile = tSnap.find((t) => keyOf(t) === action.key);
+      if (tile) tile.type = action.toType;
+    });
+  }
+
+  return true;
+}
+
 function runEasyAiTurn() {
   if (gameMode !== 'easy-ai' || currentPlayer !== 'red') return;
   const planner = window.UpKeepEasyAI;
-  if (!planner?.chooseAction) {
+  if (!planner || (!planner.chooseCandidates && !planner.chooseAction)) {
     lastDebug = 'Easy AI unavailable: planner file missing.';
     return;
   }
@@ -564,28 +601,39 @@ function runEasyAiTurn() {
   let acted = false;
   for (let i = 0; i < 4; i += 1) {
     const state = buildEasyAiState();
-    const action = planner.chooseAction(state);
-    if (!action) break;
+    const candidates = planner.chooseCandidates
+      ? planner.chooseCandidates(state)
+      : [planner.chooseAction(state)].filter(Boolean);
 
-    if (action.type === 'move' && canMove(action.from, action.to)) {
-      moveUnit(action.from, action.to);
-      acted = true;
-      continue;
+    let executed = false;
+    for (const action of candidates) {
+      if (!action || aiActionWouldCauseShortage(action, 'red')) continue;
+
+      if (action.type === 'move' && canMove(action.from, action.to)) {
+        moveUnit(action.from, action.to);
+        acted = true;
+        executed = true;
+        break;
+      }
+      if (action.type === 'shoot' && canRangedAttack(action.from, action.to)) {
+        rangedAttack(action.from, action.to);
+        acted = true;
+        executed = true;
+        break;
+      }
+      if (action.type === 'train' && trainUnitAt(action.key, action.unitType)) {
+        acted = true;
+        executed = true;
+        break;
+      }
+      if (action.type === 'upgrade-tile' && upgradeTileAt(action.key, action.toType)) {
+        acted = true;
+        executed = true;
+        break;
+      }
     }
-    if (action.type === 'shoot' && canRangedAttack(action.from, action.to)) {
-      rangedAttack(action.from, action.to);
-      acted = true;
-      continue;
-    }
-    if (action.type === 'train' && trainUnitAt(action.key, action.unitType)) {
-      acted = true;
-      continue;
-    }
-    if (action.type === 'upgrade-tile' && upgradeTileAt(action.key, action.toType)) {
-      acted = true;
-      continue;
-    }
-    break;
+
+    if (!executed) break;
   }
 
   if (!acted) lastDebug = 'Easy AI: no action available; passing turn.';
@@ -603,6 +651,66 @@ let selectedKey = null;
 let lastDebug = '';
 let resourceFocus = null; // { resource, mode: 'produced'|'used' }
 let resourceHover = null; // temporary hover focus
+
+let boardZoom = 1;
+const BASE_BOARD_WIDTH = 2200;
+const BASE_BOARD_HEIGHT = 1900;
+let animationFrameHandle = null;
+const activeAnimations = [];
+
+function applyBoardZoom() {
+  board.style.width = `${Math.round(BASE_BOARD_WIDTH * boardZoom)}px`;
+  board.style.height = `${Math.round(BASE_BOARD_HEIGHT * boardZoom)}px`;
+}
+
+function startMoveAnimation(fromKey, toKey, unit) {
+  const from = axialToPixel(getCellByKey(fromKey));
+  const to = axialToPixel(getCellByKey(toKey));
+  activeAnimations.push({
+    type: 'move',
+    unit: { ...unit },
+    from,
+    to,
+    fromKey,
+    toKey,
+    start: performance.now(),
+    duration: 220,
+  });
+  tickAnimations();
+}
+
+function startShotAnimation(fromKey, toKey, player) {
+  const from = axialToPixel(getCellByKey(fromKey));
+  const to = axialToPixel(getCellByKey(toKey));
+  activeAnimations.push({
+    type: 'shot',
+    from,
+    to,
+    player,
+    start: performance.now(),
+    duration: 180,
+  });
+  tickAnimations();
+}
+
+function tickAnimations() {
+  if (animationFrameHandle) return;
+  const step = () => {
+    const now = performance.now();
+    for (let i = activeAnimations.length - 1; i >= 0; i -= 1) {
+      const a = activeAnimations[i];
+      a.t = Math.max(0, Math.min(1, (now - a.start) / a.duration));
+      if (a.t >= 1) activeAnimations.splice(i, 1);
+    }
+    render();
+    if (activeAnimations.length) {
+      animationFrameHandle = requestAnimationFrame(step);
+    } else {
+      animationFrameHandle = null;
+    }
+  };
+  animationFrameHandle = requestAnimationFrame(step);
+}
 
 function getTile(key) { return tiles.find((t) => keyOf(t) === key); }
 function getCellByKey(key) { const [q, r] = key.split(',').map(Number); return { q, r }; }
@@ -946,10 +1054,7 @@ function explainMoveFailure(fromKey, toKey) {
   if (unit.player !== currentPlayer) return `Move invalid: it is ${currentPlayer}'s turn.`;
   if (unit.movesLeft <= 0) return 'Move invalid: unit has no moves left this turn.';
 
-  if (unit.type === 'surveyor') {
-    const reach = getSurveyorReach(fromKey, unit);
-    if (!reach.destinations.has(toKey)) return 'Move invalid: surveyor can only end on highlighted open-path destinations.';
-  } else if (isCavalry(unit.type)) {
+  if (isCavalry(unit.type)) {
     const targets = getCavalryDestinations(fromKey, unit);
     if (!targets.has(toKey)) return 'Move invalid: cavalry can only end on highlighted destinations reached through open-path routing.';
   } else {
@@ -981,10 +1086,7 @@ function canMove(fromKey, toKey) {
   if (!unit || unit.player !== currentPlayer || unit.movesLeft <= 0) return false;
   if (destinationUnit && destinationUnit.player === unit.player) return false;
 
-  if (unit.type === 'surveyor') {
-    const reach = getSurveyorReach(fromKey, unit);
-    if (!reach.destinations.has(toKey)) return false;
-  } else if (isCavalry(unit.type)) {
+  if (isCavalry(unit.type)) {
     const targets = getCavalryDestinations(fromKey, unit);
     if (!targets.has(toKey)) return false;
   } else {
@@ -1063,6 +1165,7 @@ function rangedAttack(fromKey, toKey) {
   const attacker = units.get(fromKey);
   const target = units.get(toKey);
   if (!attacker || !target) return false;
+  startShotAnimation(fromKey, toKey, attacker.player);
   units.delete(toKey);
   attacker.actionsLeft -= 1;
   lastDebug = `Attack ok: ${attacker.type} shot ${target.type} at ${toKey}.`;
@@ -1072,7 +1175,6 @@ function rangedAttack(fromKey, toKey) {
 function getMoveTargets(fromKey) {
   const unit = units.get(fromKey);
   if (!unit) return [];
-  if (unit.type === 'surveyor') return [...getSurveyorReach(fromKey, unit).destinations];
   if (isCavalry(unit.type)) return [...getCavalryDestinations(fromKey, unit)];
   return tiles.map(keyOf).filter((toKey) => canMove(fromKey, toKey));
 }
@@ -1125,15 +1227,7 @@ function moveUnit(fromKey, toKey) {
   const destTile = getTile(toKey);
   if (!unit || !destTile) return;
 
-  let usedSteps = 1;
-  let surveyorPath = null;
-  if (unit.type === 'surveyor') {
-    const reach = getSurveyorReach(fromKey, unit);
-    surveyorPath = reconstructPath(reach.parent, fromKey, toKey);
-    usedSteps = Math.max(1, surveyorPath.length - 1);
-  }
-
-  const nextMoves = isCavalry(unit.type) ? 0 : Math.max(0, unit.movesLeft - usedSteps);
+  const nextMoves = isCavalry(unit.type) ? 0 : Math.max(0, unit.movesLeft - 1);
   const priorOwner = destTile.owner;
   const warning = moveEconomyWarning(fromKey, toKey, nextMoves);
 
@@ -1144,20 +1238,7 @@ function moveUnit(fromKey, toKey) {
   if (defeated && ['crossbow', 'barrage_captain'].includes(unit.type)) unit.actionsLeft = Math.max(0, unit.actionsLeft - 1);
   units.set(toKey, unit);
   units.delete(fromKey);
-
-  // Surveyor claims every tile along a multi-step route.
-  if (unit.type === 'surveyor' && surveyorPath) {
-    for (const k of surveyorPath.slice(0, -1)) {
-      const t = getTile(k);
-      if (!t) continue;
-      const needsUpkeep = Boolean(structureUpkeep[t.type]);
-      if (!needsUpkeep || canClaimUpkeepTileNow(unit.player, t.type)) {
-        t.owner = unit.player;
-      } else {
-        t.owner = null;
-      }
-    }
-  }
+  startMoveAnimation(fromKey, toKey, unit);
 
   let claimText = '';
   const upkeepRequired = Boolean(structureUpkeep[destTile.type]);
@@ -1550,6 +1631,7 @@ function render(logs = []) {
     if (!hoveredCell) resourceHover = null;
   }
   board.innerHTML = '';
+  applyBoardZoom();
   const targets = selectedKey ? new Set(getTargets(selectedKey)) : new Set();
   const activeFocus = resourceHover || resourceFocus;
   const focusedKeys = activeFocus ? getResourceContributors(currentPlayer, activeFocus.resource, activeFocus.mode) : null;
@@ -1771,7 +1853,8 @@ function render(logs = []) {
     }
 
     const unit = units.get(key);
-    if (unit) {
+    const hasIncomingMoveAnim = activeAnimations.some((a) => a.type === 'move' && a.toKey === key && (a.t || 0) < 1);
+    if (unit && !hasIncomingMoveAnim) {
       const group = document.createElementNS('http://www.w3.org/2000/svg', 'g');
       group.setAttribute('pointer-events', 'none');
 
@@ -1813,6 +1896,78 @@ function render(logs = []) {
 
       renderUnitGlyph(unit, pos, group);
       board.appendChild(group);
+    }
+  }
+
+  for (const anim of activeAnimations) {
+    const t = anim.t || 0;
+    if (anim.type === 'move') {
+      const ease = t < 0.5 ? 2 * t * t : 1 - ((-2 * t + 2) ** 2) / 2;
+      const x = anim.from.x + (anim.to.x - anim.from.x) * ease;
+      const y = anim.from.y + (anim.to.y - anim.from.y) * ease;
+      const group = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+      const ring = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+      ring.setAttribute('cx', String(x));
+      ring.setAttribute('cy', String(y));
+      ring.setAttribute('r', '17');
+      ring.setAttribute('class', 'unit-ring');
+      ring.setAttribute('fill', anim.unit.player === 'blue' ? '#2563eb' : '#dc2626');
+      ring.style.stroke = '#ffffff';
+      ring.style.strokeWidth = '2.4px';
+      group.appendChild(ring);
+      renderUnitGlyph(anim.unit, { x, y }, group);
+      board.appendChild(group);
+    }
+
+    if (anim.type === 'shot') {
+      const x = anim.from.x + (anim.to.x - anim.from.x) * t;
+      const y = anim.from.y + (anim.to.y - anim.from.y) * t;
+      const angle = Math.atan2(anim.to.y - anim.from.y, anim.to.x - anim.from.x);
+      const len = 16;
+      const tailX = x - Math.cos(angle) * len;
+      const tailY = y - Math.sin(angle) * len;
+
+      const shaft = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+      shaft.setAttribute('x1', String(tailX));
+      shaft.setAttribute('y1', String(tailY));
+      shaft.setAttribute('x2', String(x));
+      shaft.setAttribute('y2', String(y));
+      shaft.setAttribute('stroke', '#f8fafc');
+      shaft.setAttribute('stroke-width', '2.4');
+      shaft.setAttribute('stroke-linecap', 'round');
+      board.appendChild(shaft);
+
+      const head = document.createElementNS('http://www.w3.org/2000/svg', 'polygon');
+      const hx1 = x;
+      const hy1 = y;
+      const hx2 = x - Math.cos(angle - 0.35) * 7;
+      const hy2 = y - Math.sin(angle - 0.35) * 7;
+      const hx3 = x - Math.cos(angle + 0.35) * 7;
+      const hy3 = y - Math.sin(angle + 0.35) * 7;
+      head.setAttribute('points', `${hx1},${hy1} ${hx2},${hy2} ${hx3},${hy3}`);
+      head.setAttribute('fill', '#f8fafc');
+      board.appendChild(head);
+
+      const f1 = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+      const f2 = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+      const fx = tailX;
+      const fy = tailY;
+      const fa = angle + Math.PI / 2;
+      const fb = angle - Math.PI / 2;
+      f1.setAttribute('x1', String(fx));
+      f1.setAttribute('y1', String(fy));
+      f1.setAttribute('x2', String(fx + Math.cos(fa) * 5));
+      f1.setAttribute('y2', String(fy + Math.sin(fa) * 5));
+      f2.setAttribute('x1', String(fx));
+      f2.setAttribute('y1', String(fy));
+      f2.setAttribute('x2', String(fx + Math.cos(fb) * 5));
+      f2.setAttribute('y2', String(fy + Math.sin(fb) * 5));
+      for (const f of [f1, f2]) {
+        f.setAttribute('stroke', '#f8fafc');
+        f.setAttribute('stroke-width', '2');
+        f.setAttribute('stroke-linecap', 'round');
+        board.appendChild(f);
+      }
     }
   }
 
@@ -1886,5 +2041,21 @@ endTurnBtn.addEventListener('click', () => {
 start1pBtn?.addEventListener('click', () => startGame('solo'));
 start2pBtn?.addEventListener('click', () => startGame('duo'));
 startEasyAiBtn?.addEventListener('click', () => startGame('easy-ai'));
+
+
+zoomInBtn?.addEventListener('click', () => {
+  boardZoom = Math.min(2.0, Number((boardZoom + 0.1).toFixed(2)));
+  render();
+});
+
+zoomOutBtn?.addEventListener('click', () => {
+  boardZoom = Math.max(0.5, Number((boardZoom - 0.1).toFixed(2)));
+  render();
+});
+
+zoomResetBtn?.addEventListener('click', () => {
+  boardZoom = 1;
+  render();
+});
 
 render();
