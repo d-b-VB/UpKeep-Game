@@ -61,6 +61,12 @@ h1 { text-align: center; margin: 0 0 0.25rem; }
 .board-wrap {
   padding: 10px;
   overflow: auto;
+  cursor: grab;
+}
+
+.board-wrap.panning {
+  cursor: grabbing;
+  user-select: none;
 }
 
 .panel {
@@ -109,7 +115,6 @@ button:disabled { opacity: 0.45; cursor: not-allowed; }
 .mosaic-control input[type="range"] {
   width: 100%;
 }
-<<<<<<< codex/create-simple-browser-based-hex-game-demo-t50bsc
 
 .zoom-controls {
   margin-top: 10px;
@@ -117,5 +122,3 @@ button:disabled { opacity: 0.45; cursor: not-allowed; }
   grid-template-columns: 1fr 1fr 1fr;
   gap: 6px;
 }
-=======
->>>>>>> main

@@ -1,4 +1,5 @@
 const board = document.getElementById('hex-board');
+const boardWrap = document.getElementById('board-wrap');
 const statusText = document.getElementById('status');
 const resourcesEl = document.getElementById('resources');
 const selectionEl = document.getElementById('selection');
@@ -291,7 +292,7 @@ function productionQtyForTile(player, tile, tileSnapshot = tiles, unitSnapshot =
 
   const tileMap = new Map(tileSnapshot.map((t) => [keyOf(t), t]));
   const settlementTypes = new Set(Object.keys(structureUpkeep));
-  const hasPalace = tileSnapshot.some((t) => t.owner === player && t.type === 'palace');
+  const palaceCount = tileSnapshot.filter((t) => t.owner === player && t.type === 'palace').length;
   const adjacentOwned = adjacentKeys(keyOf(tile)).map((k) => tileMap.get(k)).filter((t) => t && t.owner === player);
 
   let additive = 0;
@@ -311,7 +312,7 @@ function productionQtyForTile(player, tile, tileSnapshot = tiles, unitSnapshot =
   if (settlementTypes.has(tile.type)) {
     const manorAdj = adjacentOwned.filter((t) => t.type === 'manor').length;
     if (manorAdj > 0) qty *= (2 ** manorAdj);
-    if (hasPalace) qty *= 2;
+    if (palaceCount > 0) qty *= (1 + palaceCount);
   }
 
   return qty;
@@ -556,38 +557,54 @@ function buildEasyAiState() {
   };
 }
 
+function deficitScore(player, tSnap = tiles, uSnap = units) {
+  const eco = computeEconomy(player, tSnap, uSnap);
+  return resourceKeys.reduce((sum, r) => sum + Math.max(0, -(eco.available[r] || 0)), 0);
+}
+
 function aiActionWouldCauseShortage(action, player = 'red') {
   if (!action) return true;
 
+  const beforeScore = deficitScore(player);
+  const tSnap = tiles.map((t) => ({ ...t }));
+  const uSnap = cloneUnits(units);
+
   if (action.type === 'move') {
     if (!canMove(action.from, action.to)) return true;
-    const unit = units.get(action.from);
-    if (!unit) return true;
+    const unit = uSnap.get(action.from);
+    const dest = tSnap.find((t) => keyOf(t) === action.to);
+    if (!unit || !dest) return true;
 
-    const nextMoves = isCavalry(unit.type) ? 0 : Math.max(0, unit.movesLeft - 1);
-    return Boolean(moveEconomyWarning(action.from, action.to, nextMoves));
-  }
+    uSnap.delete(action.from);
+    const moved = { ...unit, movesLeft: isCavalry(unit.type) ? 0 : Math.max(0, unit.movesLeft - 1) };
+    uSnap.set(action.to, moved);
 
-  if (action.type === 'shoot') {
+    if (!structureUpkeep[dest.type]) {
+      dest.owner = player;
+    } else if (canClaimUpkeepTileNow(player, dest.type, tSnap, uSnap)) {
+      dest.owner = player;
+    } else if (dest.owner === player) {
+      dest.owner = player;
+    } else {
+      dest.owner = null;
+    }
+  } else if (action.type === 'shoot') {
     if (!canRangedAttack(action.from, action.to)) return true;
-    return economyDeficits(player).length > 0;
+    uSnap.delete(action.to);
+  } else if (action.type === 'train') {
+    const tile = tSnap.find((t) => keyOf(t) === action.key);
+    if (!tile || uSnap.get(action.key)) return true;
+    uSnap.set(action.key, { player, type: action.unitType, movesLeft: 0, actionsLeft: 0 });
+  } else if (action.type === 'upgrade-tile') {
+    const tile = tSnap.find((t) => keyOf(t) === action.key);
+    if (!tile) return true;
+    tile.type = action.toType;
+  } else {
+    return true;
   }
 
-  if (action.type === 'train') {
-    if (!getTile(action.key) || units.get(action.key)) return true;
-    return !isActionSustainable(player, (_tSnap, uSnap) => {
-      uSnap.set(action.key, { player, type: action.unitType, movesLeft: 0, actionsLeft: 0 });
-    });
-  }
-
-  if (action.type === 'upgrade-tile') {
-    return !isActionSustainable(player, (tSnap) => {
-      const tile = tSnap.find((t) => keyOf(t) === action.key);
-      if (tile) tile.type = action.toType;
-    });
-  }
-
-  return true;
+  const afterScore = deficitScore(player, tSnap, uSnap);
+  return afterScore > beforeScore;
 }
 
 function runEasyAiTurn() {
@@ -599,7 +616,7 @@ function runEasyAiTurn() {
   }
 
   let acted = false;
-  for (let i = 0; i < 4; i += 1) {
+  for (let i = 0; i < 1; i += 1) {
     const state = buildEasyAiState();
     const candidates = planner.chooseCandidates
       ? planner.chooseCandidates(state)
@@ -653,14 +670,22 @@ let resourceFocus = null; // { resource, mode: 'produced'|'used' }
 let resourceHover = null; // temporary hover focus
 
 let boardZoom = 1;
-const BASE_BOARD_WIDTH = 2200;
-const BASE_BOARD_HEIGHT = 1900;
+let boardBaseWidth = 2200;
+let boardBaseHeight = 1900;
+let boardViewMinX = 0;
+let boardViewMinY = 0;
+let isPanning = false;
+let panStartX = 0;
+let panStartY = 0;
+let panStartScrollLeft = 0;
+let panStartScrollTop = 0;
 let animationFrameHandle = null;
 const activeAnimations = [];
 
 function applyBoardZoom() {
-  board.style.width = `${Math.round(BASE_BOARD_WIDTH * boardZoom)}px`;
-  board.style.height = `${Math.round(BASE_BOARD_HEIGHT * boardZoom)}px`;
+  board.style.width = `${Math.round(boardBaseWidth * boardZoom)}px`;
+  board.style.height = `${Math.round(boardBaseHeight * boardZoom)}px`;
+  board.setAttribute('viewBox', `${boardViewMinX} ${boardViewMinY} ${boardBaseWidth} ${boardBaseHeight}`);
 }
 
 function startMoveAnimation(fromKey, toKey, unit) {
@@ -716,6 +741,32 @@ function getTile(key) { return tiles.find((t) => keyOf(t) === key); }
 function getCellByKey(key) { const [q, r] = key.split(',').map(Number); return { q, r }; }
 function isAdjacent(a, b) { return DIRECTIONS.some(([dq, dr]) => a.q + dq === b.q && a.r + dr === b.r); }
 
+
+function isMilitaryUnitType(unitType) {
+  const cls = UNIT_DEFS[unitType]?.cls;
+  return cls === 'infantry' || cls === 'archer' || cls === 'cavalry';
+}
+
+function isUnitUpkeepFree(player, key, unit, tileSnapshot = tiles) {
+  const tileMap = new Map(tileSnapshot.map((t) => [keyOf(t), t]));
+  const tile = tileMap.get(key);
+  if (!tile || !unit) return false;
+  if (freeUnitCondition[unit.type]?.(tile)) return true;
+
+  if (!isMilitaryUnitType(unit.type)) return false;
+
+  const ownFort = tile.owner === player && ['outpost', 'stronghold', 'keep'].includes(tile.type);
+  if (ownFort) return true;
+
+  const hasAdjacentOwnedKeep = adjacentKeys(key).some((adjKey) => {
+    const adjTile = tileMap.get(adjKey);
+    return adjTile && adjTile.owner === player && adjTile.type === 'keep';
+  });
+  if (hasAdjacentOwnedKeep) return true;
+
+  return false;
+}
+
 function computeEconomy(player, tileSnapshot = tiles, unitSnapshot = units) {
   const produced = Object.fromEntries(resourceKeys.map((k) => [k, 0]));
   const used = Object.fromEntries(resourceKeys.map((k) => [k, 0]));
@@ -731,7 +782,7 @@ function computeEconomy(player, tileSnapshot = tiles, unitSnapshot = units) {
 
     const unit = unitSnapshot.get(keyOf(tile));
     if (!unit || unit.player !== player) continue;
-    if (freeUnitCondition[unit.type]?.(tile)) continue;
+    if (isUnitUpkeepFree(player, keyOf(tile), unit, tileSnapshot)) continue;
     const uNeed = unitUpkeep[unit.type] || {};
     for (const [res, amt] of Object.entries(uNeed)) used[res] += amt;
   }
@@ -755,7 +806,7 @@ function getResourceContributors(player, resource, mode, tileSnapshot = tiles, u
 
     if (((structureUpkeep[tile.type] || {})[resource] || 0) > 0) out.add(key);
     const u = unitSnapshot.get(key);
-    if (u && u.player === player && !freeUnitCondition[u.type]?.(tile) && ((unitUpkeep[u.type] || {})[resource] || 0) > 0) out.add(key);
+    if (u && u.player === player && !isUnitUpkeepFree(player, key, u, tileSnapshot) && ((unitUpkeep[u.type] || {})[resource] || 0) > 0) out.add(key);
   }
   return out;
 }
@@ -805,14 +856,15 @@ function canClaimUpkeepTileNow(player, tileType, tileSnapshot = tiles, unitSnaps
 function canSupportUnitUpgrade(player, fromType, toType, key) {
   const eco = computeEconomy(player);
   const tile = getTile(key);
+  const unit = units.get(key) || { player, type: fromType };
   const fromUpkeep = unitUpkeep[fromType] || {};
   const toUpkeep = unitUpkeep[toType] || {};
 
   // If upgraded unit will be free on this tile, always supportable.
-  if (tile && freeUnitCondition[toType]?.(tile)) return true;
+  if (tile && isUnitUpkeepFree(player, key, { ...unit, type: toType }, tiles)) return true;
 
   for (const [res, toAmt] of Object.entries(toUpkeep)) {
-    const fromAmt = freeUnitCondition[fromType]?.(tile) ? 0 : (fromUpkeep[res] || 0);
+    const fromAmt = (tile && isUnitUpkeepFree(player, key, { ...unit, type: fromType }, tiles)) ? 0 : (fromUpkeep[res] || 0);
     const afterUse = eco.used[res] - fromAmt + toAmt;
     if (eco.produced[res] < afterUse) return false;
   }
@@ -836,7 +888,7 @@ function enforceShortages(player) {
     for (const [key, unit] of units.entries()) {
       if (unit.player !== player) continue;
       const tile = getTile(key);
-      if (!tile || freeUnitCondition[unit.type]?.(tile)) continue;
+      if (!tile || isUnitUpkeepFree(player, key, unit, tiles)) continue;
       const amount = (unitUpkeep[unit.type] || {})[resource] || 0;
       if (!amount) continue;
       unitConsumers.push({ key, amount, dist: nearestProducerDistance(player, resource, tile), unitType: unit.type });
@@ -915,6 +967,15 @@ function isTileClosedFor(player, key) {
   const tile = getTile(key);
   if (!tile) return true;
   if (terrainClosedForPlayer(tile, player)) return true;
+
+  // Enemy strongholds and keeps close adjacent tiles.
+  for (const nKey of adjacentKeys(key)) {
+    const nTile = getTile(nKey);
+    if (!nTile) continue;
+    if (nTile.owner && nTile.owner !== player && ['stronghold', 'keep'].includes(nTile.type)) {
+      return true;
+    }
+  }
 
   // Pikeman closes adjacent tiles for enemies only.
   for (const nKey of adjacentKeys(key)) {
@@ -1298,7 +1359,7 @@ function canSupportUnitSpawn(player, unitType, key) {
   const eco = computeEconomy(player);
   const tile = getTile(key);
   if (!tile) return false;
-  if (freeUnitCondition[unitType]?.(tile)) return true;
+  if (isUnitUpkeepFree(player, key, { player, type: unitType }, tiles)) return true;
   const need = unitUpkeep[unitType] || {};
   for (const [res, amt] of Object.entries(need)) {
     const afterUse = eco.used[res] + amt;
@@ -1639,6 +1700,18 @@ function render(logs = []) {
   const tileCenters = tiles.map((tile) => ({ tile, pos: axialToPixel(tile), poly: polygonVertices(axialToPixel(tile), HEX_RADIUS) }));
   const tileMap = new Map(tiles.map((t) => [keyOf(t), t]));
 
+  if (tileCenters.length) {
+    const pad = HEX_RADIUS * 2.2;
+    const minX = Math.min(...tileCenters.map((tc) => tc.pos.x - HEX_RADIUS)) - pad;
+    const maxX = Math.max(...tileCenters.map((tc) => tc.pos.x + HEX_RADIUS)) + pad;
+    const minY = Math.min(...tileCenters.map((tc) => tc.pos.y - HEX_RADIUS)) - pad;
+    const maxY = Math.max(...tileCenters.map((tc) => tc.pos.y + HEX_RADIUS)) + pad;
+    boardViewMinX = Math.floor(minX);
+    boardViewMinY = Math.floor(minY);
+    boardBaseWidth = Math.max(800, Math.ceil(maxX - minX));
+    boardBaseHeight = Math.max(700, Math.ceil(maxY - minY));
+  }
+
   // Dominant-bleed mosaic with adjustable resolution.
   const mosaicGroup = document.createElementNS('http://www.w3.org/2000/svg', 'g');
   mosaicGroup.setAttribute('pointer-events', 'none');
@@ -1823,7 +1896,8 @@ function render(logs = []) {
       text.setAttribute('y', String(sy + 5));
       text.setAttribute('text-anchor', 'middle');
       text.setAttribute('class', 'symbol');
-      if (houses.has(symbol)) {
+      const greatHouseHead = ['manor', 'estate', 'palace'].includes(tile.type) && i === 0;
+      if (houses.has(symbol) || greatHouseHead) {
         text.style.fontSize = '19.5px';
         text.style.stroke = 'rgba(10,14,28,0.95)';
         text.style.strokeWidth = '1.6px';
@@ -2057,5 +2131,36 @@ zoomResetBtn?.addEventListener('click', () => {
   boardZoom = 1;
   render();
 });
+
+
+if (boardWrap) {
+  boardWrap.addEventListener('mousedown', (event) => {
+    isPanning = true;
+    panStartX = event.clientX;
+    panStartY = event.clientY;
+    panStartScrollLeft = boardWrap.scrollLeft;
+    panStartScrollTop = boardWrap.scrollTop;
+    boardWrap.classList.add('panning');
+  });
+
+  window.addEventListener('mousemove', (event) => {
+    if (!isPanning) return;
+    const dx = event.clientX - panStartX;
+    const dy = event.clientY - panStartY;
+    boardWrap.scrollLeft = panStartScrollLeft - dx;
+    boardWrap.scrollTop = panStartScrollTop - dy;
+  });
+
+  window.addEventListener('mouseup', () => {
+    isPanning = false;
+    boardWrap.classList.remove('panning');
+  });
+
+  boardWrap.addEventListener('mouseleave', () => {
+    if (!isPanning) return;
+    isPanning = false;
+    boardWrap.classList.remove('panning');
+  });
+}
 
 render();
