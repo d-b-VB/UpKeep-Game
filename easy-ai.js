@@ -10,9 +10,9 @@
     return Math.max(Math.abs(a.q - b.q), Math.abs(a.r - b.r), Math.abs(as - bs));
   }
 
-  function tileOwnerByKey(tiles) {
+  function tileByKey(tiles) {
     const m = new Map();
-    for (const t of tiles) m.set(t.key, t.owner);
+    for (const t of tiles) m.set(t.key, t);
     return m;
   }
 
@@ -22,143 +22,161 @@
     return m;
   }
 
-  function scoreDestination(fromKey, toKey, state, unitMap, ownerMap) {
-    const fromCell = keyToCell(fromKey);
-    const toCell = keyToCell(toKey);
-    let score = 0;
-
-    const defender = unitMap.get(toKey);
-    if (defender && defender.player !== 'red') score += 30;
-
-    const owner = ownerMap.get(toKey);
-    if (owner === 'blue') score += 16;
-    else if (owner === null || owner === undefined) score += 7;
-
-    let nearestBlue = 999;
-    for (const unit of state.units) {
-      if (unit.player !== 'blue') continue;
-      nearestBlue = Math.min(nearestBlue, cubeDistance(toCell, keyToCell(unit.key)));
-    }
-    if (nearestBlue < 999) score += (8 - Math.min(8, nearestBlue));
-
-    score += Math.min(3, cubeDistance(fromCell, toCell));
-    return score;
+  function unitClass(state, type) {
+    return state.unitDefs?.[type]?.cls || '';
   }
 
-  function chooseTrainCandidates(state) {
+  function isLongWeapon(type) {
+    return ['spearman', 'pikeman', 'lancer', 'longbow'].includes(type);
+  }
+
+  function prefersClosed(type) {
+    return ['swordsman', 'infantry_sergeant', 'axman', 'worker', 'laborer', 'architect'].includes(type);
+  }
+
+  function pickTargetResource(state) {
+    const order = state.resourceOrder || [];
+    const avail = state.eco?.available || {};
+    if (!order.length) return 'crops';
+
+    let best = order[0];
+    let bestVal = Number.POSITIVE_INFINITY;
+    for (const r of order) {
+      const v = Number(avail[r] || 0);
+      if (v < bestVal) {
+        bestVal = v;
+        best = r;
+      }
+    }
+    return best;
+  }
+
+  function chooseUpgradeCandidates(state, targetResource) {
+    const upgrades = state.legalTileUpgrades || [];
+    const toPriority = { city: 10, town: 8, village: 6, palace: 5, estate: 4, manor: 3, keep: 4, stronghold: 3, outpost: 2 };
+
+    return upgrades.map((u) => {
+      const produced = state.productionByType?.[u.toType];
+      const score = (toPriority[u.toType] || 0)
+        + (produced === targetResource ? 10 : 0)
+        + (u.toType === 'village' ? 2 : 0)
+        + (u.toType === 'town' ? 3 : 0)
+        + (u.toType === 'city' ? 4 : 0)
+        + Math.random() * 1.5;
+      return { type: 'upgrade-tile', key: u.key, toType: u.toType, score };
+    }).sort((a, b) => b.score - a.score);
+  }
+
+  function chooseTrainCandidates(state, targetResource) {
     const trains = state.legalTrains || [];
     if (!trains.length) return [];
 
-    const tilePriority = {
-      city: 12,
-      town: 11,
-      village: 10,
-      estate: 7,
-      manor: 6,
-      stronghold: 5,
-      outpost: 4,
-      palace: 3,
-      keep: 2,
-      homestead: 1,
-    };
+    const rank = { homestead: 1, village: 2, town: 3, city: 4, manor: 2, estate: 3, palace: 4, outpost: 2, stronghold: 3, keep: 4 };
+    const resourceAvail = state.eco?.available || {};
+    const wood = resourceAvail.wood || 0;
+    const livestock = resourceAvail.livestock || 0;
+    const crops = resourceAvail.crops || 0;
 
-    const unitPenalty = {
-      axman: -6,
-      worker: 2,
-      laborer: 2,
-      spearman: 1,
-      hunter: 2,
-      swordsman: 2,
-      horseman: 1,
-      architect: 2,
-      pikeman: 1,
-      lancer: 1,
-      longbow: 2,
-      constable: 1,
-      rangehand: 1,
-      surveyor: 1,
-      infantry_sergeant: 1,
-      barrage_captain: 1,
-      royal_knight: 1,
-    };
+    let soldierFocus = 'infantry';
+    if (wood >= livestock && wood >= crops) soldierFocus = 'archer';
+    else if (livestock >= wood && livestock >= crops) soldierFocus = 'cavalry';
 
-    const redAxmen = (state.units || []).filter((u) => u.player === 'red' && u.type === 'axman').length;
+    const tileMap = tileByKey(state.tiles || []);
+    const owned = (state.tiles || []).filter((t) => t.owner === 'red');
+    const upgradableOwned = owned.filter((t) => (state.upgradePaths?.[t.type] || []).length > 0).length;
+    const workers = (state.units || []).filter((u) => ['worker', 'defworker'].includes(unitClass(state, u.type))).length;
+    const needWorkers = upgradableOwned > (workers * 1.6 + 1);
 
-    return trains
-      .map((t) => ({
-        type: 'train',
-        key: t.key,
-        unitType: t.unitType,
-        score: (tilePriority[t.tileType] || 0) + (unitPenalty[t.unitType] || 0) - (t.unitType === 'axman' ? redAxmen : 0),
-      }))
-      .sort((a, b) => b.score - a.score);
+    return trains.map((t) => {
+      const cls = unitClass(state, t.unitType);
+      const isWorker = cls === 'worker' || cls === 'defworker';
+      const isSoldier = ['infantry', 'archer', 'cavalry'].includes(cls);
+
+      let score = (rank[t.tileType] || 0) * 8;
+      score += (rank[t.tileType] >= 3 ? 8 : 0); // most advanced settlements first
+
+      if (needWorkers) score += isWorker ? 12 : -4;
+      else score += isSoldier ? 8 : -2;
+
+      if (!needWorkers && isSoldier && cls === soldierFocus) score += 8;
+      if (t.unitType === 'axman') score -= 6;
+
+      // if target resource is weak, prefer unit classes that don't lean on weak resources
+      if (targetResource === 'wood' && cls === 'archer') score += 2;
+      if (targetResource === 'livestock' && cls === 'cavalry') score += 2;
+      if (targetResource === 'crops' && cls === 'infantry') score += 2;
+
+      score += Math.random() * 2;
+      return { type: 'train', key: t.key, unitType: t.unitType, score };
+    }).sort((a, b) => b.score - a.score);
   }
 
-  function chooseUpgradeCandidates(state) {
-    const upgrades = state.legalTileUpgrades || [];
-    if (!upgrades.length) return [];
+  function scoreMove(unit, fromKey, toKey, state, targetResource, tileMap, unitMap) {
+    const toTile = tileMap.get(toKey);
+    const fromCell = keyToCell(fromKey);
+    const toCell = keyToCell(toKey);
+    const cls = unitClass(state, unit.type);
+    const prod = state.productionByType?.[toTile?.type || ''];
+    const friendlyAdj = (state.cells || []).filter((c) => {
+      const k = `${c.q},${c.r}`;
+      if (cubeDistance(c, toCell) !== 1) return false;
+      const u = unitMap.get(k);
+      return u && u.player === 'red';
+    }).length;
 
-    const toPriority = {
-      city: 16,
-      town: 13,
-      village: 10,
-      palace: 8,
-      estate: 7,
-      manor: 6,
-      keep: 6,
-      stronghold: 5,
-      outpost: 4,
-      homestead: 3,
-      farm: 2,
-      pasture: 1,
-    };
+    let score = 0;
+    if (toTile?.owner === 'blue') score += 14;
+    else if (!toTile?.owner) score += 6;
 
-    return upgrades
-      .map((u) => ({
-        type: 'upgrade-tile',
-        key: u.key,
-        toType: u.toType,
-        score: (toPriority[u.toType] || 0) + (u.toType === 'village' ? 2 : 0) + (u.toType === 'town' ? 3 : 0) + (u.toType === 'city' ? 4 : 0),
-      }))
-      .sort((a, b) => b.score - a.score);
+    if (prod === targetResource) score += 10;
+
+    // stay grouped
+    score += friendlyAdj * 2.5;
+
+    const closed = Boolean(toTile && state.closedTiles?.[toKey]);
+    if ((cls === 'cavalry' || isLongWeapon(unit.type)) && closed) score -= 8;
+    if (prefersClosed(unit.type) && closed) score += 4;
+
+    score += Math.max(0, 4 - cubeDistance(fromCell, toCell));
+    score += Math.random() * 1.5;
+    return score;
   }
 
-  function chooseMoveCandidates(state) {
-    const ownerMap = tileOwnerByKey(state.tiles || []);
+  function chooseMoveCandidates(state, targetResource) {
+    const tileMap = tileByKey(state.tiles || []);
     const unitMap = unitByKey(state.units || []);
-    const moveActions = [];
+    const out = [];
 
     for (const unit of state.units || []) {
       if (unit.player !== 'red') continue;
-      const moves = (state.legalMovesByUnit && state.legalMovesByUnit[unit.key]) || [];
+      const moves = state.legalMovesByUnit?.[unit.key] || [];
       for (const toKey of moves) {
-        const s = scoreDestination(unit.key, toKey, state, unitMap, ownerMap);
-        moveActions.push({ type: 'move', from: unit.key, to: toKey, score: s });
+        const score = scoreMove(unit, unit.key, toKey, state, targetResource, tileMap, unitMap);
+        out.push({ type: 'move', from: unit.key, to: toKey, score });
       }
     }
 
-    moveActions.sort((a, b) => b.score - a.score);
-    return moveActions;
+    return out.sort((a, b) => b.score - a.score);
   }
 
   function chooseShotCandidates(state) {
     const out = [];
     for (const unit of state.units || []) {
       if (unit.player !== 'red') continue;
-      const shots = (state.legalShotsByUnit && state.legalShotsByUnit[unit.key]) || [];
-      for (const to of shots) out.push({ type: 'shoot', from: unit.key, to, score: 1 });
+      const shots = state.legalShotsByUnit?.[unit.key] || [];
+      for (const to of shots) out.push({ type: 'shoot', from: unit.key, to, score: 1 + Math.random() });
     }
-    return out;
+    return out.sort((a, b) => b.score - a.score);
   }
 
   function chooseCandidates(state) {
     if (!state || state.currentPlayer !== 'red') return [];
+    const targetResource = pickTargetResource(state);
 
-    // Prioritize growth first, then force-preserving movement, then ranged picks.
     return [
-      ...chooseUpgradeCandidates(state),
-      ...chooseTrainCandidates(state),
-      ...chooseMoveCandidates(state),
+      ...chooseUpgradeCandidates(state, targetResource),
+      ...chooseTrainCandidates(state, targetResource),
+      ...chooseMoveCandidates(state, targetResource),
       ...chooseShotCandidates(state),
     ];
   }

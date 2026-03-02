@@ -7,10 +7,13 @@ const endTurnBtn = document.getElementById('end-turn');
 const zoomOutBtn = document.getElementById('zoom-out');
 const zoomResetBtn = document.getElementById('zoom-reset');
 const zoomInBtn = document.getElementById('zoom-in');
+const helpToggleBtn = document.getElementById('help-toggle');
 const modeMenuEl = document.getElementById('mode-menu');
 const start1pBtn = document.getElementById('start-1p');
 const start2pBtn = document.getElementById('start-2p');
 const startEasyAiBtn = document.getElementById('start-easy-ai');
+const primitivityIndexEl = document.getElementById('primitivity-index');
+const primitivityIndexValueEl = document.getElementById('primitivity-index-value');
 
 const HEX_RADIUS = 42;
 const MINI_RADIUS = 8;
@@ -20,33 +23,55 @@ const MAP_RADIUS = 6; // 127 tiles
 const SOLO_START_RADIUS = 2; // 19 tiles
 const ULTRA_MOSAIC = { name: 'Ultra', miniRadius: 5.2 };
 
-// Spawn distribution from chained percentages:
-// 60% forest; 60% of remainder pasture; 60% of remainder farm; 60% of remainder homestead.
-// Remaining pool is split 50% settlement line, 25% great-house line, 25% fortification line.
-// Within each line: 60% level-1, 60% of remainder level-2, remainder level-3.
-// Final exact percentages:
-// forest 60.0000
-// pasture 24.0000
-// farm 9.6000
-// homestead 3.8400
-// village 0.7680, town 0.3072, city 0.2048
-// manor 0.3840, estate 0.1536, palace 0.1024
-// outpost 0.3840, stronghold 0.1536, keep 0.1024
-const spawnPercentages = {
-  forest: 60.0000,
-  pasture: 24.0000,
-  farm: 9.6000,
-  homestead: 3.8400,
-  village: 0.7680,
-  town: 0.3072,
-  city: 0.2048,
-  manor: 0.3840,
-  estate: 0.1536,
-  palace: 0.1024,
-  outpost: 0.3840,
-  stronghold: 0.1536,
-  keep: 0.1024,
-};
+// Spawn distribution from chained percentages driven by primitivity index P.
+// P% forest, then P% of remainder to pasture, then farm, then homestead.
+// Remaining pool: 50% settlement line, 25% great-house line, 25% fortification line.
+// Each line allocates P% to level-1, P% of remainder to level-2, rest to level-3.
+let primitivityIndex = 60;
+let spawnPercentages = {};
+let weightedTypes = [];
+
+function computeSpawnDistribution(primitivityPct) {
+  const p = Math.max(0, Math.min(1, primitivityPct / 100));
+  let rem = 1;
+
+  const forest = rem * p; rem -= forest;
+  const pasture = rem * p; rem -= pasture;
+  const farm = rem * p; rem -= farm;
+  const homestead = rem * p; rem -= homestead;
+
+  const settlementPool = rem * 0.5;
+  const greatHousePool = rem * 0.25;
+  const fortPool = rem * 0.25;
+
+  function split3(pool) {
+    let r = pool;
+    const l1 = r * p; r -= l1;
+    const l2 = r * p; r -= l2;
+    const l3 = r;
+    return [l1, l2, l3];
+  }
+
+  const [village, town, city] = split3(settlementPool);
+  const [manor, estate, palace] = split3(greatHousePool);
+  const [outpost, stronghold, keep] = split3(fortPool);
+
+  return {
+    forest: forest * 100,
+    pasture: pasture * 100,
+    farm: farm * 100,
+    homestead: homestead * 100,
+    village: village * 100,
+    town: town * 100,
+    city: city * 100,
+    manor: manor * 100,
+    estate: estate * 100,
+    palace: palace * 100,
+    outpost: outpost * 100,
+    stronghold: stronghold * 100,
+    keep: keep * 100,
+  };
+}
 
 function buildWeightedTypes(percentages, scale = 10000) {
   const out = [];
@@ -57,7 +82,14 @@ function buildWeightedTypes(percentages, scale = 10000) {
   return out;
 }
 
-const weightedTypes = buildWeightedTypes(spawnPercentages);
+function applyPrimitivityIndex(value) {
+  primitivityIndex = Math.max(15, Math.min(100, Number(value) || 60));
+  spawnPercentages = computeSpawnDistribution(primitivityIndex);
+  weightedTypes = buildWeightedTypes(spawnPercentages);
+  if (primitivityIndexValueEl) primitivityIndexValueEl.textContent = `${primitivityIndex}%`;
+}
+
+applyPrimitivityIndex(primitivityIndex);
 
 const tilePalettes = {
   forest: ['#1b5e20', '#2e7d32', '#6d4c41'],
@@ -98,7 +130,7 @@ const UNIT_DEFS = {
   axman: { emoji: '🪓', cls: 'defworker', terrainUpgrader: true },
   laborer: { emoji: '♠️', cls: 'worker', terrainUpgrader: true },
   architect: { emoji: '📐', cls: 'worker', terrainUpgrader: true },
-  rangehand: { emoji: '🪃', cls: 'archer', terrainUpgrader: false },
+  rangehand: { emoji: '🧑‍🌾', cls: 'archer', terrainUpgrader: false },
   surveyor: { emoji: '🧭', cls: 'defworker', terrainUpgrader: true },
   constable: { emoji: '♣️', cls: 'defworker', terrainUpgrader: true },
 
@@ -224,6 +256,44 @@ const resourceKeys = ['wood', 'livestock', 'crops', 'provisions', 'supplies', 'c
 const resourceEmoji = {
   crops: '🌾', wood: '🪵', livestock: '🐑', provisions: '🥕', supplies: '📦',
   crafts: '🛠️', luxury: '💎', support: '🤝', authority: '⚖️', sovereignty: '👑',
+};
+
+const tileDescriptions = {
+  forest: 'Wood source; naturally closed terrain.',
+  pasture: 'Livestock source and cavalry-friendly territory.',
+  farm: 'Crop source; supports many early unit lines.',
+  homestead: 'Provision-producing base for branching upgrades.',
+  village: 'Entry settlement that trains workers/spearmen.',
+  town: 'Mid-tier settlement unlocking broader unit options.',
+  city: 'High-tier settlement with advanced unit training.',
+  manor: 'Great-house tier 1 producing support line resources.',
+  estate: 'Great-house tier 2 with stronger authority economy.',
+  palace: 'Great-house tier 3 producing sovereignty.',
+  outpost: 'Fortification tier 1, closed to enemies.',
+  stronghold: 'Fortification tier 2 with adjacent closure control.',
+  keep: 'Fortification tier 3 with strong defensive utility.',
+};
+
+const unitDescriptions = {
+  worker: 'Basic terrain upgrader with low upkeep.',
+  laborer: 'Upgrader variant for settlement growth paths.',
+  axman: 'Defensive worker line and terrain upgrader.',
+  architect: 'Advanced upgrader with two actions per turn.',
+  rangehand: 'Ranged great-house unit with mobility utility.',
+  surveyor: 'Two-step upgrader unit with mobility utility.',
+  constable: 'High-tier great-house defender.',
+  spearman: 'Infantry core; useful for zone control.',
+  swordsman: 'Direct melee infantry option.',
+  pikeman: 'Infantry with strong anti-space control role.',
+  infantry_sergeant: 'Outpost-trained defensive infantry.',
+  hunter: 'Early archer line from towns.',
+  longbow: 'Long-range archer line from cities.',
+  crossbow: 'Advanced archer with extra action economy.',
+  barrage_captain: 'Stronghold-trained elite archer.',
+  horseman: 'Fast cavalry for expansion and flanking.',
+  lancer: 'Fast cavalry with follow-through movement.',
+  cavalry_archer: 'Hybrid cavalry/ranged pressure unit.',
+  royal_knight: 'Keep-trained elite cavalry unit.',
 };
 
 function keyOf(cell) { return `${cell.q},${cell.r}`; }
@@ -502,6 +572,7 @@ function startGame(mode) {
       : '';
   resourceFocus = null;
   resourceHover = null;
+  applyPrimitivityIndex(primitivityIndexEl?.value || primitivityIndex);
   if (mode === 'solo') setupSoloGame(); else setupDuoGame();
   if (mode === 'easy-ai') revealExpandingTiles();
   render();
@@ -554,6 +625,12 @@ function buildEasyAiState() {
     ),
     legalTrains,
     legalTileUpgrades,
+    eco: computeEconomy(currentPlayer),
+    resourceOrder: [...resourceKeys],
+    productionByType: { ...productionByType },
+    upgradePaths: { ...upgradePaths },
+    unitDefs: { ...UNIT_DEFS },
+    closedTiles: Object.fromEntries(tiles.map((t) => [keyOf(t), isTileClosedFor(currentPlayer, keyOf(t))])),
   };
 }
 
@@ -576,18 +653,10 @@ function aiActionWouldCauseShortage(action, player = 'red') {
     if (!unit || !dest) return true;
 
     uSnap.delete(action.from);
-    const moved = { ...unit, movesLeft: isCavalry(unit.type) ? 0 : Math.max(0, unit.movesLeft - 1) };
+    const moved = { ...unit, movesLeft: unit.type === 'lancer' ? Math.max(0, unit.movesLeft - 1) : (isCavalry(unit.type) ? 0 : Math.max(0, unit.movesLeft - 1)) };
     uSnap.set(action.to, moved);
 
-    if (!structureUpkeep[dest.type]) {
-      dest.owner = player;
-    } else if (canClaimUpkeepTileNow(player, dest.type, tSnap, uSnap)) {
-      dest.owner = player;
-    } else if (dest.owner === player) {
-      dest.owner = player;
-    } else {
-      dest.owner = null;
-    }
+    applyTileControlAfterMove(dest, player, moved.type, tSnap, uSnap);
   } else if (action.type === 'shoot') {
     if (!canRangedAttack(action.from, action.to)) return true;
     uSnap.delete(action.to);
@@ -681,6 +750,7 @@ let panStartScrollLeft = 0;
 let panStartScrollTop = 0;
 let animationFrameHandle = null;
 const activeAnimations = [];
+let showActionHelp = false;
 
 function applyBoardZoom() {
   board.style.width = `${Math.round(boardBaseWidth * boardZoom)}px`;
@@ -933,6 +1003,44 @@ function resetTurnActions(player) {
 
 function isMeleeMilitary(unitType) {
   return ['spearman', 'swordsman', 'pikeman', 'infantry_sergeant', 'horseman', 'lancer', 'royal_knight', 'axman'].includes(unitType);
+}
+
+function isDirectCaptureMilitary(unitType) {
+  const cls = UNIT_DEFS[unitType]?.cls;
+  if (!['infantry', 'archer', 'cavalry'].includes(cls)) return false;
+  // Great-house line and worker-style units can contest, but cannot directly flip enemy tiles.
+  return !['axman', 'worker', 'laborer', 'architect', 'rangehand', 'surveyor', 'constable'].includes(unitType);
+}
+
+function applyTileControlAfterMove(tile, moverPlayer, moverType, tileSnapshot = tiles, unitSnapshot = units) {
+  const wasEnemy = Boolean(tile.owner) && tile.owner !== moverPlayer;
+  const upkeepRequired = Boolean(structureUpkeep[tile.type]);
+
+  if (tile.owner === moverPlayer) {
+    return { claimText: 'holding friendly territory' };
+  }
+
+  if (wasEnemy && !isDirectCaptureMilitary(moverType)) {
+    tile.owner = null;
+    return { claimText: `contested ${tile.type} and left it neutral (non-military capture rule)` };
+  }
+
+  if (!upkeepRequired) {
+    tile.owner = moverPlayer;
+    return { claimText: wasEnemy ? 'captured enemy territory' : 'claimed neutral tile' };
+  }
+
+  if (canClaimUpkeepTileNow(moverPlayer, tile.type, tileSnapshot, unitSnapshot)) {
+    tile.owner = moverPlayer;
+    return { claimText: wasEnemy ? 'captured enemy territory' : 'claimed neutral tile' };
+  }
+
+  tile.owner = null;
+  return {
+    claimText: wasEnemy
+      ? `contested enemy tile and left it neutral (insufficient ${tile.type} upkeep stream)`
+      : 'stood on neutral tile without claiming (insufficient upkeep stream)',
+  };
 }
 
 function unitAtKey(key) {
@@ -1258,19 +1366,7 @@ function moveEconomyWarning(fromKey, toKey, nextMoves) {
 
   const t = tSnap.find((x) => keyOf(x) === toKey);
   if (t) {
-    const beforeOwner = t.owner;
-    const upkeepRequired = Boolean(structureUpkeep[t.type]);
-    if (beforeOwner === currentPlayer) {
-      t.owner = currentPlayer;
-    } else if (!upkeepRequired) {
-      // Resource tiles/homestead can always be claimed.
-      t.owner = currentPlayer;
-    } else if (canClaimUpkeepTileNow(currentPlayer, t.type, tSnap, uSnap)) {
-      t.owner = currentPlayer;
-    } else {
-      // Not enough stream to maintain this newly captured upkeep-bearing tile.
-      t.owner = null;
-    }
+    applyTileControlAfterMove(t, currentPlayer, srcUnit.type, tSnap, uSnap);
   }
 
   const deficits = economyDeficits(currentPlayer, tSnap, uSnap);
@@ -1288,8 +1384,7 @@ function moveUnit(fromKey, toKey) {
   const destTile = getTile(toKey);
   if (!unit || !destTile) return;
 
-  const nextMoves = isCavalry(unit.type) ? 0 : Math.max(0, unit.movesLeft - 1);
-  const priorOwner = destTile.owner;
+  const nextMoves = unit.type === 'lancer' ? Math.max(0, unit.movesLeft - 1) : (isCavalry(unit.type) ? 0 : Math.max(0, unit.movesLeft - 1));
   const warning = moveEconomyWarning(fromKey, toKey, nextMoves);
 
   const defeated = units.get(toKey) && units.get(toKey).player !== unit.player;
@@ -1301,23 +1396,7 @@ function moveUnit(fromKey, toKey) {
   units.delete(fromKey);
   startMoveAnimation(fromKey, toKey, unit);
 
-  let claimText = '';
-  const upkeepRequired = Boolean(structureUpkeep[destTile.type]);
-  if (priorOwner === currentPlayer) {
-    claimText = 'holding friendly territory';
-  } else if (!upkeepRequired) {
-    // Resource tiles (including homestead) are always claimable.
-    destTile.owner = currentPlayer;
-    claimText = priorOwner ? `captured ${priorOwner} territory` : 'claimed neutral tile';
-  } else if (canClaimUpkeepTileNow(currentPlayer, destTile.type)) {
-    destTile.owner = currentPlayer;
-    claimText = priorOwner ? `captured ${priorOwner} territory` : 'claimed neutral tile';
-  } else {
-    destTile.owner = null;
-    claimText = priorOwner
-      ? `contested enemy tile and left it neutral (insufficient ${destTile.type} upkeep stream)`
-      : 'stood on neutral tile without claiming (insufficient upkeep stream)';
-  }
+  const { claimText } = applyTileControlAfterMove(destTile, currentPlayer, unit.type, tiles, units);
 
   lastDebug = `Move ok: ${unit.type} moved to ${toKey}, ${claimText}. ${warning}`.trim();
   revealExpandingTiles();
@@ -1457,6 +1536,37 @@ function renderResources() {
 }
 
 
+function formatCostChip(resource, amount, state = 'new') {
+  const emoji = resourceEmoji[resource] || '•';
+  return `<span class="cost-chip ${state}">${emoji} ${amount}</span>`;
+}
+
+function missingResourcesForUnitSpawn(player, unitType, key) {
+  const tile = getTile(key);
+  if (!tile) return new Set(Object.keys(unitUpkeep[unitType] || {}));
+  if (isUnitUpkeepFree(player, key, { player, type: unitType }, tiles)) return new Set();
+  const eco = computeEconomy(player);
+  const missing = new Set();
+  const need = unitUpkeep[unitType] || {};
+  for (const [res, amt] of Object.entries(need)) {
+    if ((eco.available[res] || 0) < amt) missing.add(res);
+  }
+  return missing;
+}
+
+function missingResourcesForTileUpgrade(player, fromType, toType) {
+  const { produced, used } = computeEconomy(player);
+  const fromNeed = structureUpkeep[fromType] || {};
+  const toNeed = structureUpkeep[toType] || {};
+  const missing = new Set();
+  for (const [res, amt] of Object.entries(toNeed)) {
+    const prior = fromNeed[res] || 0;
+    const afterUse = (used[res] || 0) - prior + amt;
+    if ((produced[res] || 0) < afterUse) missing.add(res);
+  }
+  return missing;
+}
+
 function renderSelectionPanel() {
   if (!selectedKey) {
     selectionEl.innerHTML = 'Select a tile/unit to see actions.';
@@ -1472,16 +1582,71 @@ function renderSelectionPanel() {
 
   if (unit && unit.player === currentPlayer && tile.owner === currentPlayer && UNIT_DEFS[unit.type]?.terrainUpgrader && unit.actionsLeft > 0) {
     const next = upgradePaths[tile.type] || [];
-    for (const toType of next) html += `<button data-upgrade-terrain="${toType}">Upgrade Terrain → ${toType}</button>`;
+    for (const toType of next) {
+      const toNeed = structureUpkeep[toType] || {};
+      const fromNeed = structureUpkeep[tile.type] || {};
+      const missing = missingResourcesForTileUpgrade(currentPlayer, tile.type, toType);
+      const blocked = missing.size > 0;
+      let costHtml = '<span class="action-costs">';
+      for (const [res, amt] of Object.entries(toNeed)) {
+        const prior = fromNeed[res] || 0;
+        const isNew = amt > prior;
+        const displayAmt = isNew ? (amt - prior) : amt;
+        const state = missing.has(res) ? 'missing' : (isNew ? 'new' : 'existing');
+        costHtml += formatCostChip(res, displayAmt, state);
+      }
+      costHtml += '</span>';
+      html += `<button class="action-btn ${blocked ? 'blocked' : ''}" data-upgrade-terrain="${toType}" ${blocked ? 'disabled' : ''}>Upgrade Terrain → ${toType}${costHtml}</button>`;
+      if (showActionHelp) {
+        html += `<div class="action-help">${tileDescriptions[toType] || 'Upgrade terrain to unlock next-tier options.'}</div>`;
+      }
+    }
   }
 
   if (!unit && tile.owner === currentPlayer && TRAIN_AT[tile.type]?.length) {
-    for (const ut of TRAIN_AT[tile.type]) html += `<button data-train-unit="${ut}">Train ${ut}</button>`;
+    for (const ut of TRAIN_AT[tile.type]) {
+      const missing = missingResourcesForUnitSpawn(currentPlayer, ut, selectedKey);
+      const blocked = missing.size > 0 || !canSupportUnitSpawn(currentPlayer, ut, selectedKey);
+      const cost = unitUpkeep[ut] || {};
+      let costHtml = '<span class="action-costs">';
+      for (const [res, amt] of Object.entries(cost)) {
+        const state = missing.has(res) ? 'missing' : 'new';
+        costHtml += formatCostChip(res, amt, state);
+      }
+      costHtml += '</span>';
+      html += `<button class="action-btn ${blocked ? 'blocked' : ''}" data-train-unit="${ut}" ${blocked ? 'disabled' : ''}>Train ${(UNIT_DEFS[ut]?.emoji || '❓')} ${ut}${costHtml}</button>`;
+      if (showActionHelp) {
+        html += `<div class="action-help">${unitDescriptions[ut] || 'Trainable unit.'}</div>`;
+      }
+    }
   }
 
   if (unit && unit.player === currentPlayer) {
     const uOpts = UNIT_UPGRADE_OPTIONS[tile.type]?.[unit.type] || [];
-    for (const newType of uOpts) html += `<button data-upgrade-unit="${newType}">Upgrade Unit → ${newType}</button>`;
+    for (const newType of uOpts) {
+      const blocked = !canSupportUnitUpgrade(currentPlayer, unit.type, newType, selectedKey);
+      const cost = unitUpkeep[newType] || {};
+      const prev = unitUpkeep[unit.type] || {};
+      const missing = new Set();
+      const eco = computeEconomy(currentPlayer);
+      for (const [res, amt] of Object.entries(cost)) {
+        const afterUse = (eco.used[res] || 0) - (prev[res] || 0) + amt;
+        if ((eco.produced[res] || 0) < afterUse) missing.add(res);
+      }
+      let costHtml = '<span class="action-costs">';
+      for (const [res, amt] of Object.entries(cost)) {
+        const prior = prev[res] || 0;
+        const isNew = amt > prior;
+        const displayAmt = isNew ? (amt - prior) : amt;
+        const state = missing.has(res) ? 'missing' : (isNew ? 'new' : 'existing');
+        costHtml += formatCostChip(res, displayAmt, state);
+      }
+      costHtml += '</span>';
+      html += `<button class="action-btn ${blocked ? 'blocked' : ''}" data-upgrade-unit="${newType}" ${blocked ? 'disabled' : ''}>Upgrade Unit → ${(UNIT_DEFS[newType]?.emoji || '❓')} ${newType}${costHtml}</button>`;
+      if (showActionHelp) {
+        html += `<div class="action-help">${unitDescriptions[newType] || 'Unit upgrade option.'}</div>`;
+      }
+    }
   }
 
   html += `<div style="margin-top:8px;font-size:12px;opacity:.9;"><strong>Debug:</strong> ${lastDebug || '—'}</div>`;
@@ -1570,6 +1735,40 @@ function renderLancerGlyph(pos) {
   return g;
 }
 
+function renderRangehandGlyph(pos) {
+  const g = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+
+  // Field-worker body
+  const worker = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+  worker.setAttribute('x', String(pos.x - 5));
+  worker.setAttribute('y', String(pos.y + 3));
+  worker.setAttribute('class', 'unit-icon');
+  worker.style.fontSize = '15px';
+  worker.textContent = '🧑‍🌾';
+  g.appendChild(worker);
+
+  // Sling strap (simple David-style loop)
+  const sling = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+  sling.setAttribute('d', `M ${pos.x - 3} ${pos.y - 1} Q ${pos.x + 6} ${pos.y - 11} ${pos.x + 12} ${pos.y - 1}`);
+  sling.setAttribute('fill', 'none');
+  sling.setAttribute('stroke', '#f8fafc');
+  sling.setAttribute('stroke-width', '2.2');
+  sling.setAttribute('stroke-linecap', 'round');
+  g.appendChild(sling);
+
+  // Stone in the sling pouch
+  const stone = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+  stone.setAttribute('cx', String(pos.x + 6));
+  stone.setAttribute('cy', String(pos.y - 8.5));
+  stone.setAttribute('r', '2.2');
+  stone.setAttribute('fill', '#cbd5e1');
+  stone.setAttribute('stroke', '#0f172a');
+  stone.setAttribute('stroke-width', '0.8');
+  g.appendChild(stone);
+
+  return g;
+}
+
 function renderLongbowGlyph(pos) {
   const g = document.createElementNS('http://www.w3.org/2000/svg', 'g');
   const bow = document.createElementNS('http://www.w3.org/2000/svg', 'text');
@@ -1654,6 +1853,10 @@ function renderUnitGlyph(unit, pos, group) {
   }
   if (unit.type === 'lancer') {
     group.appendChild(renderLancerGlyph(pos));
+    return;
+  }
+  if (unit.type === 'rangehand') {
+    group.appendChild(renderRangehandGlyph(pos));
     return;
   }
   if (unit.type === 'longbow') {
@@ -2130,6 +2333,16 @@ zoomOutBtn?.addEventListener('click', () => {
 zoomResetBtn?.addEventListener('click', () => {
   boardZoom = 1;
   render();
+});
+
+helpToggleBtn?.addEventListener('click', () => {
+  showActionHelp = !showActionHelp;
+  helpToggleBtn.textContent = showActionHelp ? '❔ Help: On' : '❔ Help: Off';
+  renderSelectionPanel();
+});
+
+primitivityIndexEl?.addEventListener('input', () => {
+  applyPrimitivityIndex(primitivityIndexEl.value);
 });
 
 
