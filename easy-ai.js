@@ -59,7 +59,28 @@
     return target;
   }
 
-  function chooseUpgradeCandidates(state, targetResource) {
+  function buildResourceBalancePlan(state) {
+    const order = state.resourceOrder || [];
+    const avail = state.eco?.available || {};
+    const strongUpgradeFrom = new Set();
+    const mildCaptureTargets = new Set();
+
+    for (let i = 0; i < order.length - 1; i += 1) {
+      const upperRes = order[i];
+      const lowerRes = order[i + 1];
+      const upper = Number(avail[upperRes] || 0);
+      const lower = Number(avail[lowerRes] || 0);
+      const hasGap = upper >= lower + 2;
+      const strongGap = hasGap && upper >= 2 * Math.max(1, lower);
+
+      if (strongGap) strongUpgradeFrom.add(upperRes);
+      else if (hasGap) mildCaptureTargets.add(lowerRes);
+    }
+
+    return { strongUpgradeFrom, mildCaptureTargets };
+  }
+
+  function chooseUpgradeCandidates(state, targetResource, balancePlan) {
     const upgrades = state.legalTileUpgrades || [];
     const toPriority = { city: 10, town: 8, village: 6, palace: 5, estate: 4, manor: 3, keep: 4, stronghold: 3, outpost: 2 };
     const avail = state.eco?.available || {};
@@ -82,6 +103,7 @@
 
         const fromRes = prodBy[u.fromType];
         if (fromRes && Number(avail[fromRes] || 0) <= 2) score -= 20;
+        if (fromRes && balancePlan?.strongUpgradeFrom?.has(fromRes)) score += 24;
         score += Math.random() * 1.2;
         return { type: 'upgrade-tile', key: u.key, toType: u.toType, score };
       })
@@ -137,7 +159,7 @@
     }).sort((a, b) => b.score - a.score);
   }
 
-  function scoreMove(unit, fromKey, toKey, state, targetResource, tileMap, unitMap) {
+  function scoreMove(unit, fromKey, toKey, state, targetResource, tileMap, unitMap, balancePlan) {
     const toTile = tileMap.get(toKey);
     const fromCell = keyToCell(fromKey);
     const toCell = keyToCell(toKey);
@@ -155,6 +177,7 @@
     else if (!toTile?.owner) score += 6;
 
     if (prod === targetResource) score += 10;
+    if (prod && balancePlan?.mildCaptureTargets?.has(prod)) score += 7;
 
     // stay grouped
     score += friendlyAdj * 2.5;
@@ -168,7 +191,7 @@
     return score;
   }
 
-  function chooseMoveCandidates(state, targetResource) {
+  function chooseMoveCandidates(state, targetResource, balancePlan) {
     const tileMap = tileByKey(state.tiles || []);
     const unitMap = unitByKey(state.units || []);
     const out = [];
@@ -177,7 +200,7 @@
       if (unit.player !== 'red') continue;
       const moves = state.legalMovesByUnit?.[unit.key] || [];
       for (const toKey of moves) {
-        const score = scoreMove(unit, unit.key, toKey, state, targetResource, tileMap, unitMap);
+        const score = scoreMove(unit, unit.key, toKey, state, targetResource, tileMap, unitMap, balancePlan);
         out.push({ type: 'move', from: unit.key, to: toKey, score });
       }
     }
@@ -198,11 +221,12 @@
   function chooseCandidates(state) {
     if (!state || state.currentPlayer !== 'red') return [];
     const targetResource = pickTargetResource(state);
+    const balancePlan = buildResourceBalancePlan(state);
 
     return [
       ...chooseTrainCandidates(state, targetResource),
-      ...chooseMoveCandidates(state, targetResource),
-      ...chooseUpgradeCandidates(state, targetResource),
+      ...chooseMoveCandidates(state, targetResource, balancePlan),
+      ...chooseUpgradeCandidates(state, targetResource, balancePlan),
       ...chooseShotCandidates(state),
     ];
   }
