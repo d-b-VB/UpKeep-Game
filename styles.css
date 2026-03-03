@@ -200,3 +200,38 @@ button:disabled { opacity: 0.45; cursor: not-allowed; }
 .primitivity-control input[type="range"] {
   width: 100%;
 }
+
+
+.sling-preview-card {
+  margin-top: 10px;
+  border-top: 1px solid rgba(255,255,255,0.16);
+  padding-top: 8px;
+}
+
+.sling-preview-card summary {
+  cursor: pointer;
+  color: #dbe4ff;
+  font-weight: 600;
+}
+
+.sling-preview-wrap {
+  margin-top: 8px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  color: #c7d7ff;
+  font-size: 0.84rem;
+}
+
+.sling-preview-wrap svg {
+  background: rgba(10, 15, 30, 0.55);
+  border: 1px solid rgba(148, 163, 184, 0.4);
+  border-radius: 10px;
+  padding: 4px;
+  flex: none;
+}
+
+.resource-row-divider td {
+  border-top: 1px solid rgba(148, 163, 184, 0.55);
+  padding-top: 5px;
+}

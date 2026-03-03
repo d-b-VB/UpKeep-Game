@@ -27,7 +27,7 @@ const ULTRA_MOSAIC = { name: 'Ultra', miniRadius: 5.2 };
 // P% forest, then P% of remainder to pasture, then farm, then homestead.
 // Remaining pool: 50% settlement line, 25% great-house line, 25% fortification line.
 // Each line allocates P% to level-1, P% of remainder to level-2, rest to level-3.
-let primitivityIndex = 60;
+let primitivityIndex = 85;
 let spawnPercentages = {};
 let weightedTypes = [];
 
@@ -83,7 +83,7 @@ function buildWeightedTypes(percentages, scale = 10000) {
 }
 
 function applyPrimitivityIndex(value) {
-  primitivityIndex = Math.max(15, Math.min(100, Number(value) || 60));
+  primitivityIndex = Math.max(15, Math.min(100, Number(value) || 85));
   spawnPercentages = computeSpawnDistribution(primitivityIndex);
   weightedTypes = buildWeightedTypes(spawnPercentages);
   if (primitivityIndexValueEl) primitivityIndexValueEl.textContent = `${primitivityIndex}%`;
@@ -130,7 +130,7 @@ const UNIT_DEFS = {
   axman: { emoji: '🪓', cls: 'defworker', terrainUpgrader: true },
   laborer: { emoji: '♠️', cls: 'worker', terrainUpgrader: true },
   architect: { emoji: '📐', cls: 'worker', terrainUpgrader: true },
-  rangehand: { emoji: '🧑‍🌾', cls: 'archer', terrainUpgrader: false },
+  rangehand: { emoji: '🪃', cls: 'archer', terrainUpgrader: false },
   surveyor: { emoji: '🧭', cls: 'defworker', terrainUpgrader: true },
   constable: { emoji: '♣️', cls: 'defworker', terrainUpgrader: true },
 
@@ -1490,7 +1490,8 @@ function renderResources() {
           const availStyle = avail < 0 ? 'color:#ef4444;font-weight:700;text-align:center;' : 'text-align:center;';
           const isFocused = resourceFocus?.resource === k;
           const chipStyle = isFocused ? 'background:#334155;border-color:#94a3b8;' : 'background:transparent;border-color:#475569;';
-          return `<tr>
+          const divider = (k === 'provisions' || k === 'support') ? '<tr class="resource-row-divider"><td colspan="4"></td></tr>' : '';
+          return `${divider}<tr>
             <td><button data-resource-toggle="${k}" style="border:1px solid;${chipStyle}color:#e2e8f0;border-radius:7px;padding:1px 6px;cursor:pointer;">${resourceEmoji[k] || ''}</button> ${k}</td>
             <td data-resource-hover="${k}" data-resource-mode="produced" style="text-align:center;cursor:help;">${eco.produced[k]}</td>
             <td data-resource-hover="${k}" data-resource-mode="used" style="text-align:center;cursor:help;">${eco.used[k]}</td>
@@ -1735,40 +1736,6 @@ function renderLancerGlyph(pos) {
   return g;
 }
 
-function renderRangehandGlyph(pos) {
-  const g = document.createElementNS('http://www.w3.org/2000/svg', 'g');
-
-  // Field-worker body
-  const worker = document.createElementNS('http://www.w3.org/2000/svg', 'text');
-  worker.setAttribute('x', String(pos.x - 5));
-  worker.setAttribute('y', String(pos.y + 3));
-  worker.setAttribute('class', 'unit-icon');
-  worker.style.fontSize = '15px';
-  worker.textContent = '🧑‍🌾';
-  g.appendChild(worker);
-
-  // Sling strap (simple David-style loop)
-  const sling = document.createElementNS('http://www.w3.org/2000/svg', 'path');
-  sling.setAttribute('d', `M ${pos.x - 3} ${pos.y - 1} Q ${pos.x + 6} ${pos.y - 11} ${pos.x + 12} ${pos.y - 1}`);
-  sling.setAttribute('fill', 'none');
-  sling.setAttribute('stroke', '#f8fafc');
-  sling.setAttribute('stroke-width', '2.2');
-  sling.setAttribute('stroke-linecap', 'round');
-  g.appendChild(sling);
-
-  // Stone in the sling pouch
-  const stone = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
-  stone.setAttribute('cx', String(pos.x + 6));
-  stone.setAttribute('cy', String(pos.y - 8.5));
-  stone.setAttribute('r', '2.2');
-  stone.setAttribute('fill', '#cbd5e1');
-  stone.setAttribute('stroke', '#0f172a');
-  stone.setAttribute('stroke-width', '0.8');
-  g.appendChild(stone);
-
-  return g;
-}
-
 function renderLongbowGlyph(pos) {
   const g = document.createElementNS('http://www.w3.org/2000/svg', 'g');
   const bow = document.createElementNS('http://www.w3.org/2000/svg', 'text');
@@ -1853,10 +1820,6 @@ function renderUnitGlyph(unit, pos, group) {
   }
   if (unit.type === 'lancer') {
     group.appendChild(renderLancerGlyph(pos));
-    return;
-  }
-  if (unit.type === 'rangehand') {
-    group.appendChild(renderRangehandGlyph(pos));
     return;
   }
   if (unit.type === 'longbow') {

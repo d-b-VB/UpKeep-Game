@@ -37,34 +37,55 @@
   function pickTargetResource(state) {
     const order = state.resourceOrder || [];
     const avail = state.eco?.available || {};
-    if (!order.length) return 'crops';
+    if (!order.length) return 'wood';
 
-    let best = order[0];
-    let bestVal = Number.POSITIVE_INFINITY;
-    for (const r of order) {
+    // Maintain descending ladder: wood > livestock > crops > provisions > ...
+    for (let i = 0; i < order.length - 1; i += 1) {
+      const upper = Number(avail[order[i]] || 0);
+      const lower = Number(avail[order[i + 1]] || 0);
+      if (upper <= lower) return order[i];
+    }
+
+    const core = order.slice(0, 4);
+    let target = core[0] || order[0];
+    let best = Number.POSITIVE_INFINITY;
+    for (const r of core) {
       const v = Number(avail[r] || 0);
-      if (v < bestVal) {
-        bestVal = v;
-        best = r;
+      if (v < best) {
+        best = v;
+        target = r;
       }
     }
-    return best;
+    return target;
   }
 
   function chooseUpgradeCandidates(state, targetResource) {
     const upgrades = state.legalTileUpgrades || [];
     const toPriority = { city: 10, town: 8, village: 6, palace: 5, estate: 4, manor: 3, keep: 4, stronghold: 3, outpost: 2 };
+    const avail = state.eco?.available || {};
+    const prodBy = state.productionByType || {};
 
-    return upgrades.map((u) => {
-      const produced = state.productionByType?.[u.toType];
-      const score = (toPriority[u.toType] || 0)
-        + (produced === targetResource ? 10 : 0)
-        + (u.toType === 'village' ? 2 : 0)
-        + (u.toType === 'town' ? 3 : 0)
-        + (u.toType === 'city' ? 4 : 0)
-        + Math.random() * 1.5;
-      return { type: 'upgrade-tile', key: u.key, toType: u.toType, score };
-    }).sort((a, b) => b.score - a.score);
+    return upgrades
+      .filter((u) => {
+        const fromRes = prodBy[u.fromType];
+        // Don't burn through a producer chain if we'd drop it below 2 available.
+        if (!fromRes) return true;
+        return Number(avail[fromRes] || 0) >= 2;
+      })
+      .map((u) => {
+        const produced = prodBy[u.toType];
+        let score = (toPriority[u.toType] || 0)
+          + (produced === targetResource ? 12 : 0)
+          + (u.toType === 'village' ? 2 : 0)
+          + (u.toType === 'town' ? 3 : 0)
+          + (u.toType === 'city' ? 4 : 0);
+
+        const fromRes = prodBy[u.fromType];
+        if (fromRes && Number(avail[fromRes] || 0) <= 2) score -= 20;
+        score += Math.random() * 1.2;
+        return { type: 'upgrade-tile', key: u.key, toType: u.toType, score };
+      })
+      .sort((a, b) => b.score - a.score);
   }
 
   function chooseTrainCandidates(state, targetResource) {
@@ -81,10 +102,12 @@
     if (wood >= livestock && wood >= crops) soldierFocus = 'archer';
     else if (livestock >= wood && livestock >= crops) soldierFocus = 'cavalry';
 
-    const tileMap = tileByKey(state.tiles || []);
     const owned = (state.tiles || []).filter((t) => t.owner === 'red');
     const upgradableOwned = owned.filter((t) => (state.upgradePaths?.[t.type] || []).length > 0).length;
     const workers = (state.units || []).filter((u) => ['worker', 'defworker'].includes(unitClass(state, u.type))).length;
+    const homesteads = owned.filter((t) => t.type === 'homestead').length;
+    const axmen = (state.units || []).filter((u) => u.player === 'red' && u.type === 'axman').length;
+    const targetAxmen = homesteads > 1 ? homesteads - 1 : 1;
     const needWorkers = upgradableOwned > (workers * 1.6 + 1);
 
     return trains.map((t) => {
@@ -99,7 +122,7 @@
       else score += isSoldier ? 8 : -2;
 
       if (!needWorkers && isSoldier && cls === soldierFocus) score += 8;
-      if (t.unitType === 'axman') score -= 6;
+      if (t.unitType === 'axman') score += axmen < targetAxmen ? 6 : -22;
 
       // if target resource is weak, prefer unit classes that don't lean on weak resources
       if (targetResource === 'wood' && cls === 'archer') score += 2;
@@ -174,9 +197,9 @@
     const targetResource = pickTargetResource(state);
 
     return [
-      ...chooseUpgradeCandidates(state, targetResource),
       ...chooseTrainCandidates(state, targetResource),
       ...chooseMoveCandidates(state, targetResource),
+      ...chooseUpgradeCandidates(state, targetResource),
       ...chooseShotCandidates(state),
     ];
   }
