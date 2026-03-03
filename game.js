@@ -206,6 +206,48 @@ const UNIT_UPGRADE_OPTIONS = {
     horseman: ['cavalry_archer'], lancer: ['cavalry_archer'],
     hunter: ['crossbow', 'cavalry_archer'], longbow: ['crossbow', 'cavalry_archer'],
   },
+  outpost: {
+    spearman: ['hunter', 'horseman'],
+    hunter: ['spearman', 'horseman'],
+    horseman: ['spearman', 'hunter'],
+    swordsman: ['longbow', 'lancer'],
+    longbow: ['swordsman', 'lancer'],
+    lancer: ['swordsman', 'longbow'],
+    pikeman: ['crossbow', 'cavalry_archer'],
+    crossbow: ['pikeman', 'cavalry_archer'],
+    cavalry_archer: ['pikeman', 'crossbow'],
+    infantry_sergeant: ['barrage_captain', 'royal_knight'],
+    barrage_captain: ['infantry_sergeant', 'royal_knight'],
+    royal_knight: ['infantry_sergeant', 'barrage_captain'],
+  },
+  stronghold: {
+    spearman: ['swordsman', 'pikeman', 'infantry_sergeant', 'hunter', 'longbow', 'crossbow', 'barrage_captain', 'horseman', 'lancer', 'cavalry_archer', 'royal_knight'],
+    swordsman: ['spearman', 'pikeman', 'infantry_sergeant', 'hunter', 'longbow', 'crossbow', 'barrage_captain', 'horseman', 'lancer', 'cavalry_archer', 'royal_knight'],
+    pikeman: ['spearman', 'swordsman', 'infantry_sergeant', 'hunter', 'longbow', 'crossbow', 'barrage_captain', 'horseman', 'lancer', 'cavalry_archer', 'royal_knight'],
+    infantry_sergeant: ['spearman', 'swordsman', 'pikeman', 'hunter', 'longbow', 'crossbow', 'barrage_captain', 'horseman', 'lancer', 'cavalry_archer', 'royal_knight'],
+    hunter: ['longbow', 'crossbow', 'barrage_captain'],
+    longbow: ['hunter', 'crossbow', 'barrage_captain'],
+    crossbow: ['hunter', 'longbow', 'barrage_captain'],
+    barrage_captain: ['hunter', 'longbow', 'crossbow'],
+    horseman: ['lancer', 'cavalry_archer', 'royal_knight'],
+    lancer: ['horseman', 'cavalry_archer', 'royal_knight'],
+    cavalry_archer: ['horseman', 'lancer', 'royal_knight'],
+    royal_knight: ['horseman', 'lancer', 'cavalry_archer'],
+  },
+  keep: {
+    spearman: ['horseman', 'lancer', 'royal_knight', 'hunter', 'longbow', 'crossbow', 'barrage_captain'],
+    swordsman: ['horseman', 'lancer', 'royal_knight', 'hunter', 'longbow', 'crossbow', 'barrage_captain'],
+    pikeman: ['horseman', 'lancer', 'royal_knight', 'hunter', 'longbow', 'crossbow', 'barrage_captain'],
+    infantry_sergeant: ['horseman', 'lancer', 'royal_knight', 'hunter', 'longbow', 'crossbow', 'barrage_captain'],
+    horseman: ['spearman', 'swordsman', 'pikeman', 'infantry_sergeant'],
+    lancer: ['spearman', 'swordsman', 'pikeman', 'infantry_sergeant'],
+    cavalry_archer: ['spearman', 'swordsman', 'pikeman', 'infantry_sergeant'],
+    royal_knight: ['spearman', 'swordsman', 'pikeman', 'infantry_sergeant'],
+    hunter: ['spearman', 'swordsman', 'pikeman', 'infantry_sergeant'],
+    longbow: ['spearman', 'swordsman', 'pikeman', 'infantry_sergeant'],
+    crossbow: ['spearman', 'swordsman', 'pikeman', 'infantry_sergeant'],
+    barrage_captain: ['spearman', 'swordsman', 'pikeman', 'infantry_sergeant'],
+  },
 };
 
 const upgradePaths = {
@@ -1105,6 +1147,40 @@ function isTileClosedFor(player, key) {
   }
 
   return false;
+}
+
+function dynamicClosureOwnerFor(player, key) {
+  const tile = getTile(key);
+  if (!tile || tile.type === 'forest') return null;
+  if (terrainClosedForPlayer(tile, player)) return null;
+
+  for (const nKey of adjacentKeys(key)) {
+    const nTile = getTile(nKey);
+    if (!nTile) continue;
+    if (nTile.owner && nTile.owner !== player && ['stronghold', 'keep'].includes(nTile.type)) {
+      return nTile.owner;
+    }
+  }
+
+  for (const nKey of adjacentKeys(key)) {
+    const u = unitAtKey(nKey);
+    if (u?.type === 'pikeman' && u.player !== player) return u.player;
+  }
+
+  for (const nKey of adjacentKeys(key)) {
+    const spear = unitAtKey(nKey);
+    if (!spear || spear.type !== 'spearman' || spear.player === player) continue;
+    const friends = adjacentKeys(key)
+      .map((k) => unitAtKey(k))
+      .filter((u) => u && u.player === spear.player && isMeleeMilitary(u.type));
+    if (friends.length >= 2) return spear.player;
+  }
+
+  return null;
+}
+
+function isTileDynamicallyClosedFor(player, key) {
+  return Boolean(dynamicClosureOwnerFor(player, key));
 }
 
 function canUseLongWeaponFrom(key, unitType) {
@@ -2049,6 +2125,41 @@ function render(logs = []) {
         edge.setAttribute('stroke-linecap', 'round');
         edge.setAttribute('pointer-events', 'none');
         board.appendChild(edge);
+      }
+    }
+
+    if (isTileDynamicallyClosedFor(currentPlayer, key)) {
+      const threatOwner = dynamicClosureOwnerFor(currentPlayer, key);
+      const xColor = ownerColor(threatOwner) || '#ef4444';
+      const verts = polygonVertices(pos, HEX_RADIUS * 0.86);
+      for (let i = 0; i < 6; i += 2) {
+        const [x1, y1] = verts[i];
+        const [x2, y2] = verts[(i + 1) % 6];
+        const mx = (x1 + x2) / 2;
+        const my = (y1 + y2) / 2;
+        const sz = 4.2;
+
+        const a = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+        a.setAttribute('x1', String(mx - sz));
+        a.setAttribute('y1', String(my - sz));
+        a.setAttribute('x2', String(mx + sz));
+        a.setAttribute('y2', String(my + sz));
+        a.setAttribute('stroke', xColor);
+        a.setAttribute('stroke-width', '1.9');
+        a.setAttribute('stroke-linecap', 'round');
+        a.setAttribute('pointer-events', 'none');
+        board.appendChild(a);
+
+        const b = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+        b.setAttribute('x1', String(mx + sz));
+        b.setAttribute('y1', String(my - sz));
+        b.setAttribute('x2', String(mx - sz));
+        b.setAttribute('y2', String(my + sz));
+        b.setAttribute('stroke', xColor);
+        b.setAttribute('stroke-width', '1.9');
+        b.setAttribute('stroke-linecap', 'round');
+        b.setAttribute('pointer-events', 'none');
+        board.appendChild(b);
       }
     }
 

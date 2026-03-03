@@ -107,10 +107,13 @@
     const workers = (state.units || []).filter((u) => ['worker', 'defworker'].includes(unitClass(state, u.type))).length;
     const homesteads = owned.filter((t) => t.type === 'homestead').length;
     const axmen = (state.units || []).filter((u) => u.player === 'red' && u.type === 'axman').length;
-    const targetAxmen = homesteads > 1 ? homesteads - 1 : 1;
+    const targetAxmen = homesteads >= 1 ? Math.max(1, homesteads - 1) : 0;
     const needWorkers = upgradableOwned > (workers * 1.6 + 1);
 
-    return trains.map((t) => {
+    return trains.filter((t) => {
+      if (t.unitType !== 'axman') return true;
+      return axmen < targetAxmen;
+    }).map((t) => {
       const cls = unitClass(state, t.unitType);
       const isWorker = cls === 'worker' || cls === 'defworker';
       const isSoldier = ['infantry', 'archer', 'cavalry'].includes(cls);
