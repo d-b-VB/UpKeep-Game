@@ -2477,7 +2477,14 @@ function render(logs = []) {
       if (cls === 'infantry' || cls === 'cavalry') {
         // Melee military uses a full white/black outline based only on movement readiness.
         const meleeReadyColor = (isCurrent && unit.movesLeft > 0) ? '#ffffff' : '#111111';
-        addRingSegment(-90, 270, meleeReadyColor);
+        const meleeRing = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+        meleeRing.setAttribute('cx', String(pos.x));
+        meleeRing.setAttribute('cy', String(pos.y));
+        meleeRing.setAttribute('r', String(rr));
+        meleeRing.setAttribute('fill', 'none');
+        meleeRing.setAttribute('stroke', meleeReadyColor);
+        meleeRing.setAttribute('stroke-width', String(ringWidth));
+        group.appendChild(meleeRing);
       } else if (unit.type === 'surveyor') {
         // Top third = action, two bottom thirds = two movement steps.
         addRingSegment(-150, -30, isCurrent && unit.actionsLeft > 0 ? actionColor : spentColor);
