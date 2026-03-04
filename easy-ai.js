@@ -181,9 +181,13 @@
     if (toTile?.owner === 'blue') score += 10;
     else if (!toTile?.owner) score += 4;
 
+    const isCapturing = toTile && toTile.owner !== 'red';
     if (prod === targetResource) score += 12;
     if (prod && balancePlan?.mildCaptureTargets?.has(prod)) score += 9;
     if (prod && balancePlan?.avoidCaptureFrom?.has(prod)) score -= 14;
+
+    // Capturing any nearby resource producer is always valuable.
+    if (isCapturing && prod) score += 18;
 
     // stay grouped
     score += friendlyAdj * 2.5;

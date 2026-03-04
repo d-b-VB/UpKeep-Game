@@ -573,8 +573,11 @@ function setupDuoGame() {
 }
 
 function revealExpandingTiles() {
-  if (gameMode !== 'solo' && gameMode !== 'easy-ai') return;
-  const unitsNow = [...units.entries()].filter(([, u]) => (gameMode === 'solo' ? u.player === 'blue' : true));
+  if (gameMode !== 'solo' && gameMode !== 'easy-ai' && gameMode !== 'online') return;
+  const unitsNow = [...units.entries()].filter(([, u]) => {
+    if (gameMode === 'solo') return u.player === 'blue';
+    return true; // easy-ai + online reveal around both sides.
+  });
   const edgeBuffer = gameMode === 'easy-ai' ? 3 : 0;
   for (const [key, unit] of unitsNow) {
     const from = getCellByKey(key);
@@ -736,7 +739,7 @@ function runEasyAiTurn() {
   }
 
   let acted = false;
-  for (let i = 0; i < 1; i += 1) {
+  for (let i = 0; i < 18; i += 1) {
     const state = buildEasyAiState();
     const candidates = planner.chooseCandidates
       ? planner.chooseCandidates(state)
@@ -897,7 +900,7 @@ function wireDataChannel(channel) {
   onlineChannel = channel;
   onlineChannel.onopen = () => {
     onlineConnected = true;
-    setOnlineStatus(`Connected as ${onlineRole}.`);
+    setOnlineStatus(onlineRole === 'host' ? 'Connected as Player 1 (host, blue).' : 'Connected as Player 2 (guest, red).');
     if (modeMenuEl) modeMenuEl.classList.add('hidden');
 
     if (onlineRole === 'host') {
@@ -912,7 +915,7 @@ function wireDataChannel(channel) {
       currentPlayer = 'blue';
       selectedKey = null;
       render();
-      setOnlineStatus('Connected as guest. Waiting for host state...');
+      setOnlineStatus('Connected as Player 2 (guest, red). Waiting for Player 1 state...');
     }
   };
 
@@ -2445,20 +2448,24 @@ function render(logs = []) {
 
       const selected = selectedKey === key;
       const isCurrent = unit.player === currentPlayer;
-      const moveReady = isCurrent && unit.movesLeft > 0;
-      const actionReady = isCurrent && unit.actionsLeft > 0;
-      const moveColor = selected ? '#facc15' : (moveReady ? '#ffffff' : '#111111');
-      const actionColor = selected ? '#facc15' : (actionReady ? '#ffffff' : '#111111');
+      const moveColor = selected ? '#facc15' : '#ffffff';
+      const actionColor = selected ? '#facc15' : '#ffffff';
+      const spentColor = '#111111';
       const ringWidth = selected ? 4 : 2.5;
       const rr = 17;
 
-      function addRingHalf(isTop, color) {
+      function addRingSegment(startDeg, endDeg, color) {
+        const start = (Math.PI / 180) * startDeg;
+        const end = (Math.PI / 180) * endDeg;
+        const x1 = pos.x + rr * Math.cos(start);
+        const y1 = pos.y + rr * Math.sin(start);
+        const x2 = pos.x + rr * Math.cos(end);
+        const y2 = pos.y + rr * Math.sin(end);
+        const delta = ((endDeg - startDeg) % 360 + 360) % 360;
+        const largeArc = delta > 180 ? 1 : 0;
+        const sweep = 1;
         const arc = document.createElementNS('http://www.w3.org/2000/svg', 'path');
-        const y = pos.y;
-        const xLeft = pos.x - rr;
-        const xRight = pos.x + rr;
-        const sweep = isTop ? 1 : 0;
-        arc.setAttribute('d', `M ${xLeft} ${y} A ${rr} ${rr} 0 0 ${sweep} ${xRight} ${y}`);
+        arc.setAttribute('d', `M ${x1} ${y1} A ${rr} ${rr} 0 ${largeArc} ${sweep} ${x2} ${y2}`);
         arc.setAttribute('fill', 'none');
         arc.setAttribute('stroke', color);
         arc.setAttribute('stroke-width', String(ringWidth));
@@ -2466,9 +2473,25 @@ function render(logs = []) {
         group.appendChild(arc);
       }
 
-      // Top half = action state (hands), bottom half = move state (feet).
-      addRingHalf(true, actionColor);
-      addRingHalf(false, moveColor);
+      const cls = UNIT_DEFS[unit.type]?.cls;
+      if (cls === 'infantry' || cls === 'cavalry') {
+        // Melee military uses movement as its primary action: full ring single color.
+        addRingSegment(-90, 270, isCurrent && unit.movesLeft > 0 ? moveColor : spentColor);
+      } else if (unit.type === 'surveyor') {
+        // Top third = action, two bottom thirds = two movement steps.
+        addRingSegment(-150, -30, isCurrent && unit.actionsLeft > 0 ? actionColor : spentColor);
+        addRingSegment(-30, 90, isCurrent && unit.movesLeft >= 1 ? moveColor : spentColor);
+        addRingSegment(90, 210, isCurrent && unit.movesLeft >= 2 ? moveColor : spentColor);
+      } else if (unit.type === 'architect') {
+        // Two top thirds = actions, bottom third = movement.
+        addRingSegment(-150, -30, isCurrent && unit.actionsLeft >= 1 ? actionColor : spentColor);
+        addRingSegment(-30, 90, isCurrent && unit.actionsLeft >= 2 ? actionColor : spentColor);
+        addRingSegment(90, 210, isCurrent && unit.movesLeft > 0 ? moveColor : spentColor);
+      } else {
+        // Default split: top half action, bottom half movement.
+        addRingSegment(180, 360, isCurrent && unit.actionsLeft > 0 ? actionColor : spentColor);
+        addRingSegment(0, 180, isCurrent && unit.movesLeft > 0 ? moveColor : spentColor);
+      }
 
       renderUnitGlyph(unit, pos, group);
       board.appendChild(group);
@@ -2558,6 +2581,22 @@ board.addEventListener('click', (event) => {
 
   const key = clicked.dataset.key;
   const clickedUnit = units.get(key);
+
+  const selectedUnit = selectedKey ? units.get(selectedKey) : null;
+  const targetUnit = units.get(key);
+  if (selectedKey && selectedUnit && targetUnit && targetUnit.player !== selectedUnit.player && isArcher(selectedUnit.type) && canRangedAttack(selectedKey, key)) {
+    let useRanged = true;
+    if (['crossbow', 'barrage_captain'].includes(selectedUnit.type) && canMove(selectedKey, key)) {
+      useRanged = window.confirm('Use ranged attack?\nOK = ranged attack (stay in place)\nCancel = melee move-attack');
+    }
+    if (useRanged) {
+      if (requestOnlineAction({ type: 'shoot', from: selectedKey, to: key })) return;
+      rangedAttack(selectedKey, key);
+      render();
+      syncOnlineStateIfHost();
+      return;
+    }
+  }
 
   if (selectedKey && canMove(selectedKey, key)) {
     if (requestOnlineAction({ type: 'move', from: selectedKey, to: key })) return;
