@@ -2475,8 +2475,9 @@ function render(logs = []) {
 
       const cls = UNIT_DEFS[unit.type]?.cls;
       if (cls === 'infantry' || cls === 'cavalry') {
-        // Melee military uses movement as its primary action: full ring single color.
-        addRingSegment(-90, 270, isCurrent && unit.movesLeft > 0 ? moveColor : spentColor);
+        // Melee military uses a full white/black outline based only on movement readiness.
+        const meleeReadyColor = (isCurrent && unit.movesLeft > 0) ? '#ffffff' : '#111111';
+        addRingSegment(-90, 270, meleeReadyColor);
       } else if (unit.type === 'surveyor') {
         // Top third = action, two bottom thirds = two movement steps.
         addRingSegment(-150, -30, isCurrent && unit.actionsLeft > 0 ? actionColor : spentColor);
