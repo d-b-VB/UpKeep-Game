@@ -25,13 +25,28 @@
           <button id="start-1p" type="button">Start 1 Player</button>
           <button id="start-2p" type="button">Start 2 Player</button>
           <button id="start-easy-ai" type="button">Start vs Easy AI</button>
+          <button id="start-online" type="button">Start Online 2 Player</button>
         </div>
         <div class="primitivity-control">
           <label for="primitivity-index">Primitivity Index: <span id="primitivity-index-value">85%</span></label>
           <input id="primitivity-index" type="range" min="15" max="100" step="1" value="85" />
         </div>
-        <details class="sling-preview-card">
-          <summary>Preview: custom sling glyph concept</summary>
+        <details class="online-connect" id="online-connect">
+          <summary>Online 2-player handshake (host/join)</summary>
+          <p class="online-help">Use copy/paste signaling: Host creates offer, Joiner pastes offer to create answer, Host pastes answer to connect.</p>
+          <div class="online-row">
+            <button id="online-host-offer" type="button">1) Host: Create Offer</button>
+            <button id="online-join-answer" type="button">2) Join: Create Answer</button>
+            <button id="online-host-apply-answer" type="button">3) Host: Apply Answer</button>
+          </div>
+          <label for="online-local-signal">Your signal (send this):</label>
+          <textarea id="online-local-signal" rows="5" spellcheck="false"></textarea>
+          <label for="online-remote-signal">Remote signal (paste here):</label>
+          <textarea id="online-remote-signal" rows="5" spellcheck="false"></textarea>
+          <div id="online-status" class="online-status">Not connected.</div>
+        </details>
+
+        <details class="sling-preview-card">          <summary>Preview: custom sling glyph concept</summary>
           <div class="sling-preview-wrap" aria-label="Sling concept preview">
             <svg width="110" height="82" viewBox="0 0 110 82" role="img" aria-label="Simple sling with stone">
               <path d="M 34 26 Q 55 52 76 26" fill="none" stroke="#f8fafc" stroke-width="4" stroke-linecap="round"/>

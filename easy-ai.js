@@ -64,6 +64,7 @@
     const avail = state.eco?.available || {};
     const strongUpgradeFrom = new Set();
     const mildCaptureTargets = new Set();
+    const avoidCaptureFrom = new Set();
 
     for (let i = 0; i < order.length - 1; i += 1) {
       const upperRes = order[i];
@@ -73,11 +74,15 @@
       const hasGap = upper >= lower + 2;
       const strongGap = hasGap && upper >= 2 * Math.max(1, lower);
 
-      if (strongGap) strongUpgradeFrom.add(upperRes);
-      else if (hasGap) mildCaptureTargets.add(lowerRes);
+      if (strongGap) {
+        strongUpgradeFrom.add(upperRes);
+        avoidCaptureFrom.add(upperRes);
+      } else if (hasGap) {
+        mildCaptureTargets.add(lowerRes);
+      }
     }
 
-    return { strongUpgradeFrom, mildCaptureTargets };
+    return { strongUpgradeFrom, mildCaptureTargets, avoidCaptureFrom };
   }
 
   function chooseUpgradeCandidates(state, targetResource, balancePlan) {
@@ -173,11 +178,12 @@
     }).length;
 
     let score = 0;
-    if (toTile?.owner === 'blue') score += 14;
-    else if (!toTile?.owner) score += 6;
+    if (toTile?.owner === 'blue') score += 10;
+    else if (!toTile?.owner) score += 4;
 
-    if (prod === targetResource) score += 10;
-    if (prod && balancePlan?.mildCaptureTargets?.has(prod)) score += 7;
+    if (prod === targetResource) score += 12;
+    if (prod && balancePlan?.mildCaptureTargets?.has(prod)) score += 9;
+    if (prod && balancePlan?.avoidCaptureFrom?.has(prod)) score -= 14;
 
     // stay grouped
     score += friendlyAdj * 2.5;
@@ -223,12 +229,17 @@
     const targetResource = pickTargetResource(state);
     const balancePlan = buildResourceBalancePlan(state);
 
-    return [
-      ...chooseTrainCandidates(state, targetResource),
-      ...chooseMoveCandidates(state, targetResource, balancePlan),
-      ...chooseUpgradeCandidates(state, targetResource, balancePlan),
-      ...chooseShotCandidates(state),
-    ];
+    const trains = chooseTrainCandidates(state, targetResource);
+    const moves = chooseMoveCandidates(state, targetResource, balancePlan);
+    const upgrades = chooseUpgradeCandidates(state, targetResource, balancePlan);
+    const shots = chooseShotCandidates(state);
+
+    // When a strong surplus exists (e.g., wood >> livestock), push conversion upgrades first.
+    if ((balancePlan.strongUpgradeFrom?.size || 0) > 0) {
+      return [...upgrades, ...moves, ...trains, ...shots];
+    }
+
+    return [...trains, ...moves, ...upgrades, ...shots];
   }
 
   function chooseAction(state) {

@@ -12,6 +12,14 @@ const modeMenuEl = document.getElementById('mode-menu');
 const start1pBtn = document.getElementById('start-1p');
 const start2pBtn = document.getElementById('start-2p');
 const startEasyAiBtn = document.getElementById('start-easy-ai');
+const startOnlineBtn = document.getElementById('start-online');
+const onlineConnectEl = document.getElementById('online-connect');
+const onlineHostOfferBtn = document.getElementById('online-host-offer');
+const onlineJoinAnswerBtn = document.getElementById('online-join-answer');
+const onlineHostApplyAnswerBtn = document.getElementById('online-host-apply-answer');
+const onlineLocalSignalEl = document.getElementById('online-local-signal');
+const onlineRemoteSignalEl = document.getElementById('online-remote-signal');
+const onlineStatusEl = document.getElementById('online-status');
 const primitivityIndexEl = document.getElementById('primitivity-index');
 const primitivityIndexValueEl = document.getElementById('primitivity-index-value');
 
@@ -517,7 +525,7 @@ let cells = [];
 let cellKeys = new Set();
 let tiles = [];
 let units = new Map();
-let gameMode = null; // 'solo' | 'duo' | 'easy-ai'
+let gameMode = null; // 'solo' | 'duo' | 'easy-ai' | 'online'
 let startInProgress = false;
 
 function makeTile(cell) {
@@ -598,6 +606,7 @@ function startGame(mode) {
   if (start1pBtn) start1pBtn.disabled = true;
   if (start2pBtn) start2pBtn.disabled = true;
   if (startEasyAiBtn) startEasyAiBtn.disabled = true;
+  if (startOnlineBtn) startOnlineBtn.disabled = true;
   const label = mode === 'solo' ? '1-player' : mode === 'easy-ai' ? 'easy AI' : '2-player';
   if (statusText) statusText.textContent = `Starting ${label} game...`;
   if (modeMenuEl) modeMenuEl.classList.add('hidden');
@@ -794,7 +803,211 @@ let animationFrameHandle = null;
 const activeAnimations = [];
 let showActionHelp = false;
 
+let onlineRole = null; // 'host' | 'guest'
+let onlinePeer = null;
+let onlineChannel = null;
+let onlineConnected = false;
+let onlineReadyToPlay = false;
+
+function setOnlineStatus(msg) {
+  if (onlineStatusEl) onlineStatusEl.textContent = msg;
+  lastDebug = msg;
+}
+
+function isOnlineGuest() {
+  return gameMode === 'online' && onlineRole === 'guest';
+}
+
+function isOnlineHost() {
+  return gameMode === 'online' && onlineRole === 'host';
+}
+
+function serializeState() {
+  return {
+    gameMode,
+    currentPlayer,
+    cells: cells.map((c) => ({ ...c })),
+    tiles: tiles.map((t) => ({ ...t })),
+    units: [...units.entries()].map(([key, unit]) => ({ key, ...unit })),
+  };
+}
+
+function applySerializedState(payload) {
+  if (!payload) return;
+  gameMode = payload.gameMode || 'online';
+  currentPlayer = payload.currentPlayer || 'blue';
+  cells = (payload.cells || []).map((c) => ({ ...c }));
+  cellKeys = new Set(cells.map(keyOf));
+  tiles = (payload.tiles || []).map((t) => ({ ...t }));
+  units = new Map((payload.units || []).map((u) => [u.key, {
+    player: u.player,
+    type: u.type,
+    movesLeft: u.movesLeft,
+    actionsLeft: u.actionsLeft,
+  }]));
+  selectedKey = null;
+  render();
+}
+
+function sendOnlineMessage(obj) {
+  if (!onlineChannel || onlineChannel.readyState !== 'open') return;
+  onlineChannel.send(JSON.stringify(obj));
+}
+
+function syncOnlineStateIfHost() {
+  if (!isOnlineHost() || !onlineConnected) return;
+  sendOnlineMessage({ type: 'state', payload: serializeState() });
+}
+
+function requestOnlineAction(action) {
+  if (!isOnlineGuest()) return false;
+  if (!onlineConnected) {
+    setOnlineStatus('Not connected: cannot send action.');
+    return true;
+  }
+  sendOnlineMessage({ type: 'action', payload: action });
+  setOnlineStatus('Action sent to host...');
+  return true;
+}
+
+async function waitIceDone(pc) {
+  if (!pc) return;
+  if (pc.iceGatheringState === 'complete') return;
+  await new Promise((resolve) => {
+    const t = setTimeout(resolve, 2200);
+    pc.addEventListener('icegatheringstatechange', () => {
+      if (pc.iceGatheringState === 'complete') {
+        clearTimeout(t);
+        resolve();
+      }
+    });
+  });
+}
+
+function resetOnlineConnection() {
+  try { onlineChannel?.close(); } catch (e) { void e; }
+  try { onlinePeer?.close(); } catch (e) { void e; }
+  onlineChannel = null;
+  onlinePeer = null;
+  onlineConnected = false;
+  onlineReadyToPlay = false;
+}
+
+function wireDataChannel(channel) {
+  onlineChannel = channel;
+  onlineChannel.onopen = () => {
+    onlineConnected = true;
+    setOnlineStatus(`Connected as ${onlineRole}.`);
+    if (modeMenuEl) modeMenuEl.classList.add('hidden');
+
+    if (onlineRole === 'host') {
+      gameMode = 'online';
+      currentPlayer = 'blue';
+      selectedKey = null;
+      setupDuoGame();
+      render();
+      syncOnlineStateIfHost();
+    } else {
+      gameMode = 'online';
+      currentPlayer = 'blue';
+      selectedKey = null;
+      render();
+      setOnlineStatus('Connected as guest. Waiting for host state...');
+    }
+  };
+
+  onlineChannel.onmessage = (ev) => {
+    let msg = null;
+    try { msg = JSON.parse(ev.data); } catch (e) { return; }
+    if (!msg) return;
+
+    if (msg.type === 'state' && onlineRole === 'guest') {
+      applySerializedState(msg.payload);
+      setOnlineStatus('Synced with host.');
+      return;
+    }
+
+    if (msg.type === 'action' && onlineRole === 'host') {
+      const a = msg.payload || {};
+      let changed = false;
+      if (a.type === 'move' && canMove(a.from, a.to)) {
+        moveUnit(a.from, a.to);
+        selectedKey = a.to;
+        changed = true;
+      } else if (a.type === 'shoot' && canRangedAttack(a.from, a.to)) {
+        rangedAttack(a.from, a.to);
+        changed = true;
+      } else if (a.type === 'train') {
+        changed = Boolean(trainUnitAt(a.key, a.unitType));
+      } else if (a.type === 'upgrade-tile') {
+        changed = Boolean(upgradeTileAt(a.key, a.toType));
+      } else if (a.type === 'upgrade-unit') {
+        const before = units.get(a.key)?.type;
+        upgradeUnitAt(a.key, a.newType);
+        changed = before !== units.get(a.key)?.type;
+      } else if (a.type === 'end-turn') {
+        const logs = [...enforceShortages('blue'), ...enforceShortages('red')];
+        currentPlayer = currentPlayer === 'blue' ? 'red' : 'blue';
+        resetTurnActions(currentPlayer);
+        revealExpandingTiles();
+        selectedKey = null;
+        render(logs);
+        changed = true;
+      }
+
+      if (changed) {
+        render();
+        syncOnlineStateIfHost();
+      }
+    }
+  };
+
+  onlineChannel.onclose = () => {
+    onlineConnected = false;
+    setOnlineStatus('Connection closed.');
+  };
+}
+
+async function hostCreateOffer() {
+  resetOnlineConnection();
+  onlineRole = 'host';
+  onlinePeer = new RTCPeerConnection({ iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] });
+  const channel = onlinePeer.createDataChannel('upkeep');
+  wireDataChannel(channel);
+  const offer = await onlinePeer.createOffer();
+  await onlinePeer.setLocalDescription(offer);
+  await waitIceDone(onlinePeer);
+  if (onlineLocalSignalEl) onlineLocalSignalEl.value = JSON.stringify(onlinePeer.localDescription);
+  setOnlineStatus('Host offer created. Share it with your opponent.');
+}
+
+async function joinCreateAnswer() {
+  resetOnlineConnection();
+  onlineRole = 'guest';
+  onlinePeer = new RTCPeerConnection({ iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] });
+  onlinePeer.ondatachannel = (event) => wireDataChannel(event.channel);
+  const raw = onlineRemoteSignalEl?.value?.trim();
+  if (!raw) { setOnlineStatus('Paste host offer first.'); return; }
+  const offer = JSON.parse(raw);
+  await onlinePeer.setRemoteDescription(offer);
+  const answer = await onlinePeer.createAnswer();
+  await onlinePeer.setLocalDescription(answer);
+  await waitIceDone(onlinePeer);
+  if (onlineLocalSignalEl) onlineLocalSignalEl.value = JSON.stringify(onlinePeer.localDescription);
+  setOnlineStatus('Join answer created. Send it to the host.');
+}
+
+async function hostApplyAnswer() {
+  if (!onlinePeer || onlineRole !== 'host') { setOnlineStatus('Create host offer first.'); return; }
+  const raw = onlineRemoteSignalEl?.value?.trim();
+  if (!raw) { setOnlineStatus('Paste join answer first.'); return; }
+  const answer = JSON.parse(raw);
+  await onlinePeer.setRemoteDescription(answer);
+  setOnlineStatus('Answer applied. Waiting for data channel...');
+}
+
 function applyBoardZoom() {
+
   board.style.width = `${Math.round(boardBaseWidth * boardZoom)}px`;
   board.style.height = `${Math.round(boardBaseHeight * boardZoom)}px`;
   board.setAttribute('viewBox', `${boardViewMinX} ${boardViewMinY} ${boardBaseWidth} ${boardBaseHeight}`);
@@ -1730,13 +1943,25 @@ function renderSelectionPanel() {
 
   selectionEl.innerHTML = html;
   selectionEl.querySelectorAll('button[data-upgrade-terrain]').forEach((btn) => {
-    btn.addEventListener('click', () => upgradeSelectedTile(btn.dataset.upgradeTerrain));
+    btn.addEventListener('click', () => {
+      if (requestOnlineAction({ type: 'upgrade-tile', key: selectedKey, toType: btn.dataset.upgradeTerrain })) return;
+      upgradeSelectedTile(btn.dataset.upgradeTerrain);
+      syncOnlineStateIfHost();
+    });
   });
   selectionEl.querySelectorAll('button[data-train-unit]').forEach((btn) => {
-    btn.addEventListener('click', () => trainUnitAt(selectedKey, btn.dataset.trainUnit));
+    btn.addEventListener('click', () => {
+      if (requestOnlineAction({ type: 'train', key: selectedKey, unitType: btn.dataset.trainUnit })) return;
+      trainUnitAt(selectedKey, btn.dataset.trainUnit);
+      syncOnlineStateIfHost();
+    });
   });
   selectionEl.querySelectorAll('button[data-upgrade-unit]').forEach((btn) => {
-    btn.addEventListener('click', () => upgradeUnitAt(selectedKey, btn.dataset.upgradeUnit));
+    btn.addEventListener('click', () => {
+      if (requestOnlineAction({ type: 'upgrade-unit', key: selectedKey, newType: btn.dataset.upgradeUnit })) return;
+      upgradeUnitAt(selectedKey, btn.dataset.upgradeUnit);
+      syncOnlineStateIfHost();
+    });
   });
 }
 
@@ -2335,15 +2560,19 @@ board.addEventListener('click', (event) => {
   const clickedUnit = units.get(key);
 
   if (selectedKey && canMove(selectedKey, key)) {
+    if (requestOnlineAction({ type: 'move', from: selectedKey, to: key })) return;
     moveUnit(selectedKey, key);
     selectedKey = key;
     render();
+    syncOnlineStateIfHost();
     return;
   }
 
   if (selectedKey && canRangedAttack(selectedKey, key)) {
+    if (requestOnlineAction({ type: 'shoot', from: selectedKey, to: key })) return;
     rangedAttack(selectedKey, key);
     render();
+    syncOnlineStateIfHost();
     return;
   }
 
@@ -2358,9 +2587,15 @@ board.addEventListener('click', (event) => {
 
   selectedKey = (clickedUnit || getTile(key)) ? key : null;
   render();
+  syncOnlineStateIfHost();
 });
 
 endTurnBtn.addEventListener('click', () => {
+  if (isOnlineGuest()) {
+    requestOnlineAction({ type: 'end-turn' });
+    return;
+  }
+
   if (gameMode === 'easy-ai' && currentPlayer === 'red') {
     lastDebug = 'Wait for AI to complete its turn.';
     render();
@@ -2387,12 +2622,19 @@ endTurnBtn.addEventListener('click', () => {
   selectedKey = null;
   lastDebug = 'Turn advanced. Economy table reflects continuous produced/used/available flow';
   render(logs);
+  syncOnlineStateIfHost();
 });
 
 start1pBtn?.addEventListener('click', () => startGame('solo'));
 start2pBtn?.addEventListener('click', () => startGame('duo'));
 startEasyAiBtn?.addEventListener('click', () => startGame('easy-ai'));
-
+startOnlineBtn?.addEventListener('click', () => {
+  if (onlineConnectEl) onlineConnectEl.open = true;
+  setOnlineStatus('Open handshake panel and start host/join flow.');
+});
+onlineHostOfferBtn?.addEventListener('click', () => hostCreateOffer().catch((e) => setOnlineStatus(`Host offer error: ${e.message}`)));
+onlineJoinAnswerBtn?.addEventListener('click', () => joinCreateAnswer().catch((e) => setOnlineStatus(`Join answer error: ${e.message}`)));
+onlineHostApplyAnswerBtn?.addEventListener('click', () => hostApplyAnswer().catch((e) => setOnlineStatus(`Apply answer error: ${e.message}`)));
 
 zoomInBtn?.addEventListener('click', () => {
   boardZoom = Math.min(2.0, Number((boardZoom + 0.1).toFixed(2)));

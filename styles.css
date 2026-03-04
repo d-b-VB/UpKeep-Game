@@ -235,3 +235,56 @@ button:disabled { opacity: 0.45; cursor: not-allowed; }
   border-top: 1px solid rgba(148, 163, 184, 0.55);
   padding-top: 5px;
 }
+
+
+.online-connect {
+  margin-top: 12px;
+  border-top: 1px solid rgba(255,255,255,0.16);
+  padding-top: 8px;
+}
+
+.online-connect summary {
+  cursor: pointer;
+  color: #dbe4ff;
+  font-weight: 600;
+}
+
+.online-help {
+  margin: 8px 0;
+  color: #c7d7ff;
+  font-size: 0.83rem;
+}
+
+.online-row {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+
+.online-connect label {
+  display: block;
+  font-size: 0.8rem;
+  color: #dbe4ff;
+  margin: 4px 0;
+}
+
+.online-connect textarea {
+  width: 100%;
+  box-sizing: border-box;
+  resize: vertical;
+  min-height: 76px;
+  border-radius: 8px;
+  border: 1px solid #64748b;
+  background: rgba(8, 12, 24, 0.8);
+  color: #e2e8f0;
+  padding: 6px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 11px;
+}
+
+.online-status {
+  margin-top: 8px;
+  font-size: 0.82rem;
+  color: #cbd5e1;
+}
