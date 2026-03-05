@@ -110,11 +110,15 @@
     }
 
     let workerCaptureMoves = 0;
+    const captureMovesByResource = {};
     for (const w of workers) {
       for (const toKey of state.legalMovesByUnit?.[w.key] || []) {
         const t = tiles.find((x) => x.key === toKey);
         const prod = state.productionByType?.[t?.type || ''];
-        if (t && t.owner !== 'red' && prod) workerCaptureMoves += 1;
+        if (t && t.owner !== 'red' && prod) {
+          workerCaptureMoves += 1;
+          captureMovesByResource[prod] = (captureMovesByResource[prod] || 0) + 1;
+        }
       }
     }
 
@@ -125,6 +129,7 @@
       workerCount,
       frontlineThreat,
       workerCaptureMoves,
+      captureMovesByResource,
       settlementUpgrades,
       needExpansionPush: workerCaptureMoves > 0 || settlementUpgrades > 0 || ownedTiles.length < 16,
     };
@@ -135,18 +140,35 @@
     const toPriority = { city: 10, town: 8, village: 6, palace: 5, estate: 4, manor: 3, keep: 4, stronghold: 3, outpost: 2 };
     const avail = state.eco?.available || {};
     const prodBy = state.productionByType || {};
+    const order = state.resourceOrder || [];
+
+    const owned = (state.tiles || []).filter((t) => t.owner === 'red');
+    const countByType = {};
+    for (const t of owned) countByType[t.type] = (countByType[t.type] || 0) + 1;
+
+    const tierTargets = {
+      homestead: Math.max(1, Math.floor((countByType.farm || 0) / 3)),
+      village: Math.max(1, Math.floor((countByType.homestead || 0) / 3)),
+      town: Math.max(1, Math.floor((countByType.village || 0) / 3)),
+      city: Math.max(1, Math.floor((countByType.town || 0) / 3)),
+      manor: Math.max(1, Math.floor((countByType.homestead || 0) / 4)),
+      estate: Math.max(1, Math.floor((countByType.manor || 0) / 3)),
+      palace: Math.max(1, Math.floor((countByType.estate || 0) / 3)),
+      outpost: Math.max(1, Math.floor((countByType.village || 0) / 2)),
+      stronghold: Math.max(1, Math.floor((countByType.town || 0) / 2)),
+      keep: Math.max(1, Math.floor((countByType.city || 0) / 2)),
+    };
 
     return upgrades
       .filter((u) => {
-        // Always allow strategic structure upgrades (settlement / great house / fortification lines).
         if (['village', 'town', 'city', 'manor', 'estate', 'palace', 'outpost', 'stronghold', 'keep'].includes(u.toType)) return true;
         const fromRes = prodBy[u.fromType];
-        // Don't burn through a producer chain if we'd drop it below 2 available.
         if (!fromRes) return true;
         return Number(avail[fromRes] || 0) >= 2;
       })
       .map((u) => {
         const produced = prodBy[u.toType];
+        const fromRes = prodBy[u.fromType];
         let score = (toPriority[u.toType] || 0)
           + (produced === targetResource ? 12 : 0)
           + (u.toType === 'village' ? 12 : 0)
@@ -156,9 +178,38 @@
         if (isWorkerClass(unitClass(state, u.unitType))) score += 8;
         if (context?.needExpansionPush && ['village', 'town', 'city', 'manor', 'estate', 'palace'].includes(u.toType)) score += 6;
 
-        const fromRes = prodBy[u.fromType];
         if (fromRes && Number(avail[fromRes] || 0) <= 2) score -= 20;
         if (fromRes && balancePlan?.strongUpgradeFrom?.has(fromRes)) score += 24;
+
+        // Keep lower-tier resources above higher tiers; avoid burning scarce basics.
+        const fromIdx = order.indexOf(fromRes);
+        if (fromIdx >= 0 && fromIdx < order.length - 1) {
+          const lowerRes = order[fromIdx + 1];
+          const fromAvail = Number(avail[fromRes] || 0);
+          const lowerAvail = Number(avail[lowerRes] || 0);
+          if (fromAvail <= lowerAvail + 1) score -= 36;
+        }
+
+        // Explicit anti-loop guard: avoid forest->pasture when wood is already weak vs livestock.
+        if (u.fromType === 'forest' && u.toType === 'pasture') {
+          const wood = Number(avail.wood || 0);
+          const livestock = Number(avail.livestock || 0);
+          if (wood < livestock || wood < 4) score -= 70;
+        }
+
+        // If livestock is bloated relative to crops, strongly prefer pasture->farm.
+        if (u.fromType === 'pasture' && u.toType === 'farm') {
+          const livestock = Number(avail.livestock || 0);
+          const crops = Number(avail.crops || 0);
+          if (livestock >= crops + 2) score += 18;
+          if (livestock >= 2 * Math.max(1, crops)) score += 14;
+        }
+
+        // Encourage staged progression (few farms -> homestead, few homesteads -> village, etc).
+        const currentToType = countByType[u.toType] || 0;
+        if (currentToType < (tierTargets[u.toType] || 0)) score += 16;
+        else score -= 4;
+
         score += Math.random() * 1.2;
         return { type: 'upgrade-tile', key: u.key, toType: u.toType, score };
       })
@@ -301,6 +352,11 @@
     const moves = chooseMoveCandidates(state, targetResource, balancePlan);
     const upgrades = chooseUpgradeCandidates(state, targetResource, balancePlan, context);
     const shots = chooseShotCandidates(state);
+
+    // If target resource can be captured now, move first (capture then upgrade is often better).
+    if ((context.captureMovesByResource?.[targetResource] || 0) > 0) {
+      return [...moves, ...upgrades, ...trains, ...shots];
+    }
 
     // If workers have immediate expansion work, prioritize active board actions over new training.
     if ((context.workerCaptureMoves || 0) > 0 || (context.settlementUpgrades || 0) > 0) {
