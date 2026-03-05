@@ -707,7 +707,15 @@ function aiActionWouldCauseShortage(action, player = 'red') {
     if (!unit || !dest) return true;
 
     uSnap.delete(action.from);
-    const moved = { ...unit, movesLeft: unit.type === 'lancer' ? Math.max(0, unit.movesLeft - 1) : (isCavalry(unit.type) ? 0 : Math.max(0, unit.movesLeft - 1)) };
+    const lancerStepCost = unit.type === 'lancer'
+      ? Math.max(1, (getLancerMoveInfo(action.from, action.to, unit)?.path?.length || 2) - 1)
+      : 1;
+    const moved = {
+      ...unit,
+      movesLeft: unit.type === 'lancer'
+        ? Math.max(0, unit.movesLeft - lancerStepCost)
+        : (isCavalry(unit.type) ? 0 : Math.max(0, unit.movesLeft - 1)),
+    };
     uSnap.set(action.to, moved);
 
     applyTileControlAfterMove(dest, player, moved.type, tSnap, uSnap);
@@ -1731,14 +1739,20 @@ function moveUnit(fromKey, toKey) {
   const destTile = getTile(toKey);
   if (!unit || !destTile) return;
 
-  const nextMoves = unit.type === 'lancer' ? Math.max(0, unit.movesLeft - 1) : (isCavalry(unit.type) ? 0 : Math.max(0, unit.movesLeft - 1));
+  let lancerMoveInfo = null;
+  if (unit.type === 'lancer') lancerMoveInfo = getLancerMoveInfo(fromKey, toKey, unit);
+  const lancerStepCost = unit.type === 'lancer'
+    ? Math.max(1, (lancerMoveInfo?.path?.length || 2) - 1)
+    : 1;
+  const nextMoves = unit.type === 'lancer'
+    ? Math.max(0, unit.movesLeft - lancerStepCost)
+    : (isCavalry(unit.type) ? 0 : Math.max(0, unit.movesLeft - 1));
   const warning = moveEconomyWarning(fromKey, toKey, nextMoves);
 
   let defeated = units.get(toKey) && units.get(toKey).player !== unit.player;
   let passThroughDefeat = null;
   if (unit.type === 'lancer') {
-    const info = getLancerMoveInfo(fromKey, toKey, unit);
-    passThroughDefeat = info?.defeatedKey || null;
+    passThroughDefeat = lancerMoveInfo?.defeatedKey || null;
     if (passThroughDefeat && passThroughDefeat !== toKey) defeated = true;
   }
 

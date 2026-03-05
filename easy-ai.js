@@ -85,7 +85,52 @@
     return { strongUpgradeFrom, mildCaptureTargets, avoidCaptureFrom };
   }
 
-  function chooseUpgradeCandidates(state, targetResource, balancePlan) {
+  function isWorkerClass(cls) {
+    return cls === 'worker' || cls === 'defworker';
+  }
+
+  function strategicContext(state) {
+    const tiles = state.tiles || [];
+    const units = state.units || [];
+    const ownedTiles = tiles.filter((t) => t.owner === 'red');
+    const redUnits = units.filter((u) => u.player === 'red');
+    const blueUnits = units.filter((u) => u.player === 'blue');
+    const workers = redUnits.filter((u) => isWorkerClass(unitClass(state, u.type)));
+    const workerCount = workers.length;
+
+    let frontlineThreat = 0;
+    for (const ru of redUnits) {
+      const a = keyToCell(ru.key);
+      for (const bu of blueUnits) {
+        if (cubeDistance(a, keyToCell(bu.key)) <= 2) {
+          frontlineThreat += 1;
+          break;
+        }
+      }
+    }
+
+    let workerCaptureMoves = 0;
+    for (const w of workers) {
+      for (const toKey of state.legalMovesByUnit?.[w.key] || []) {
+        const t = tiles.find((x) => x.key === toKey);
+        const prod = state.productionByType?.[t?.type || ''];
+        if (t && t.owner !== 'red' && prod) workerCaptureMoves += 1;
+      }
+    }
+
+    const settlementUpgrades = (state.legalTileUpgrades || []).filter((u) => ['village', 'town', 'city'].includes(u.toType)).length;
+
+    return {
+      ownedCount: ownedTiles.length,
+      workerCount,
+      frontlineThreat,
+      workerCaptureMoves,
+      settlementUpgrades,
+      needExpansionPush: workerCaptureMoves > 0 || settlementUpgrades > 0 || ownedTiles.length < 16,
+    };
+  }
+
+  function chooseUpgradeCandidates(state, targetResource, balancePlan, context) {
     const upgrades = state.legalTileUpgrades || [];
     const toPriority = { city: 10, town: 8, village: 6, palace: 5, estate: 4, manor: 3, keep: 4, stronghold: 3, outpost: 2 };
     const avail = state.eco?.available || {};
@@ -93,6 +138,8 @@
 
     return upgrades
       .filter((u) => {
+        // Always allow strategic structure upgrades (settlement / great house / fortification lines).
+        if (['village', 'town', 'city', 'manor', 'estate', 'palace', 'outpost', 'stronghold', 'keep'].includes(u.toType)) return true;
         const fromRes = prodBy[u.fromType];
         // Don't burn through a producer chain if we'd drop it below 2 available.
         if (!fromRes) return true;
@@ -102,9 +149,12 @@
         const produced = prodBy[u.toType];
         let score = (toPriority[u.toType] || 0)
           + (produced === targetResource ? 12 : 0)
-          + (u.toType === 'village' ? 2 : 0)
-          + (u.toType === 'town' ? 3 : 0)
-          + (u.toType === 'city' ? 4 : 0);
+          + (u.toType === 'village' ? 12 : 0)
+          + (u.toType === 'town' ? 14 : 0)
+          + (u.toType === 'city' ? 16 : 0);
+
+        if (isWorkerClass(unitClass(state, u.unitType))) score += 8;
+        if (context?.needExpansionPush && ['village', 'town', 'city', 'manor', 'estate', 'palace'].includes(u.toType)) score += 6;
 
         const fromRes = prodBy[u.fromType];
         if (fromRes && Number(avail[fromRes] || 0) <= 2) score -= 20;
@@ -115,7 +165,7 @@
       .sort((a, b) => b.score - a.score);
   }
 
-  function chooseTrainCandidates(state, targetResource) {
+  function chooseTrainCandidates(state, targetResource, context) {
     const trains = state.legalTrains || [];
     if (!trains.length) return [];
 
@@ -135,7 +185,7 @@
     const homesteads = owned.filter((t) => t.type === 'homestead').length;
     const axmen = (state.units || []).filter((u) => u.player === 'red' && u.type === 'axman').length;
     const targetAxmen = homesteads >= 1 ? Math.max(1, homesteads - 1) : 0;
-    const needWorkers = upgradableOwned > (workers * 1.6 + 1);
+    const needWorkers = upgradableOwned > (workers * 1.3 + 1) || (context?.workerCaptureMoves || 0) > workers;
 
     return trains.filter((t) => {
       if (t.unitType !== 'axman') return true;
@@ -148,10 +198,14 @@
       let score = (rank[t.tileType] || 0) * 8;
       score += (rank[t.tileType] >= 3 ? 8 : 0); // most advanced settlements first
 
-      if (needWorkers) score += isWorker ? 12 : -4;
-      else score += isSoldier ? 8 : -2;
+      if (needWorkers) score += isWorker ? 18 : -8;
+      else score += isSoldier ? 10 : -2;
 
-      if (!needWorkers && isSoldier && cls === soldierFocus) score += 8;
+      if (!needWorkers && isSoldier && cls === soldierFocus) score += 10;
+
+      // Build army if enemy is nearby or if wood is strong enough to support military production.
+      if (isSoldier && (context?.frontlineThreat || 0) > 0) score += 10;
+      if (isSoldier && (resourceAvail.wood || 0) > (resourceAvail.livestock || 0) + 2) score += 5;
       if (t.unitType === 'axman') score += axmen < targetAxmen ? 6 : -22;
 
       // if target resource is weak, prefer unit classes that don't lean on weak resources
@@ -188,6 +242,15 @@
 
     // Capturing any nearby resource producer is always valuable.
     if (isCapturing && prod) score += 18;
+
+    const isWorker = isWorkerClass(cls);
+    if (isWorker) {
+      // Workers should stay busy: capture first, then move toward production tiles.
+      if (isCapturing && prod) score += 22;
+      if (isCapturing && !prod) score += 8;
+      if (toTile?.owner === 'red' && prod === targetResource) score += 5;
+      if (toTile?.owner === 'red' && !prod) score -= 6;
+    }
 
     // stay grouped
     score += friendlyAdj * 2.5;
@@ -232,18 +295,24 @@
     if (!state || state.currentPlayer !== 'red') return [];
     const targetResource = pickTargetResource(state);
     const balancePlan = buildResourceBalancePlan(state);
+    const context = strategicContext(state);
 
-    const trains = chooseTrainCandidates(state, targetResource);
+    const trains = chooseTrainCandidates(state, targetResource, context);
     const moves = chooseMoveCandidates(state, targetResource, balancePlan);
-    const upgrades = chooseUpgradeCandidates(state, targetResource, balancePlan);
+    const upgrades = chooseUpgradeCandidates(state, targetResource, balancePlan, context);
     const shots = chooseShotCandidates(state);
+
+    // If workers have immediate expansion work, prioritize active board actions over new training.
+    if ((context.workerCaptureMoves || 0) > 0 || (context.settlementUpgrades || 0) > 0) {
+      return [...upgrades, ...moves, ...trains, ...shots];
+    }
 
     // When a strong surplus exists (e.g., wood >> livestock), push conversion upgrades first.
     if ((balancePlan.strongUpgradeFrom?.size || 0) > 0) {
       return [...upgrades, ...moves, ...trains, ...shots];
     }
 
-    return [...trains, ...moves, ...upgrades, ...shots];
+    return [...moves, ...upgrades, ...trains, ...shots];
   }
 
   function chooseAction(state) {
