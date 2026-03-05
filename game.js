@@ -1454,6 +1454,55 @@ function getCavalryDestinations(fromKey, unit) {
   return destinations;
 }
 
+function getLancerRouteMap(fromKey, unit) {
+  const maxSteps = Math.max(1, unit.movesLeft);
+  const startPlayer = unit.player;
+  const queue = [{ key: fromKey, steps: 0, usedKill: false, path: [fromKey], defeatedKey: null }];
+  const seen = new Set([`${fromKey}|0`]);
+  const routes = new Map();
+
+  while (queue.length) {
+    const current = queue.shift();
+    if (!current) break;
+
+    for (const nextKey of adjacentKeys(current.key)) {
+      const step = current.steps + 1;
+      if (step > maxSteps) continue;
+
+      if (isTileClosedFor(startPlayer, nextKey)) continue;
+
+      const occ = unitAtKey(nextKey);
+      const friendlyOcc = occ && occ.player === startPlayer;
+      const hostileOcc = occ && occ.player !== startPlayer;
+
+      if (friendlyOcc) continue;
+      if (hostileOcc && current.usedKill) continue;
+
+      const usedKill = current.usedKill || hostileOcc;
+      const defeatedKey = hostileOcc ? nextKey : current.defeatedKey;
+      const path = [...current.path, nextKey];
+      const stateKey = `${nextKey}|${usedKill ? 1 : 0}`;
+
+      if (!routes.has(nextKey) || step > (routes.get(nextKey)?.path?.length || 0) - 1) {
+        routes.set(nextKey, { path, defeatedKey });
+      }
+
+      if (!seen.has(stateKey)) {
+        seen.add(stateKey);
+        queue.push({ key: nextKey, steps: step, usedKill, path, defeatedKey });
+      }
+    }
+  }
+
+  routes.delete(fromKey);
+  return routes;
+}
+
+function getLancerMoveInfo(fromKey, toKey, unit = units.get(fromKey)) {
+  if (!unit || unit.type !== 'lancer') return null;
+  return getLancerRouteMap(fromKey, unit).get(toKey) || null;
+}
+
 function getSurveyorReach(fromKey, unit) {
   const maxSteps = Math.max(1, unit.movesLeft);
   const startPlayer = unit.player;
@@ -1515,7 +1564,10 @@ function explainMoveFailure(fromKey, toKey) {
   if (unit.player !== currentPlayer) return `Move invalid: it is ${currentPlayer}'s turn.`;
   if (unit.movesLeft <= 0) return 'Move invalid: unit has no moves left this turn.';
 
-  if (isCavalry(unit.type)) {
+  if (unit.type === 'lancer') {
+    const info = getLancerMoveInfo(fromKey, toKey, unit);
+    if (!info) return 'Move invalid: lancer destination is unreachable within 3 open tiles (with at most one pass-through attack).';
+  } else if (isCavalry(unit.type)) {
     const targets = getCavalryDestinations(fromKey, unit);
     if (!targets.has(toKey)) return 'Move invalid: cavalry can only end on highlighted destinations reached through open-path routing.';
   } else {
@@ -1547,7 +1599,9 @@ function canMove(fromKey, toKey) {
   if (!unit || unit.player !== currentPlayer || unit.movesLeft <= 0) return false;
   if (destinationUnit && destinationUnit.player === unit.player) return false;
 
-  if (isCavalry(unit.type)) {
+  if (unit.type === 'lancer') {
+    if (!getLancerMoveInfo(fromKey, toKey, unit)) return false;
+  } else if (isCavalry(unit.type)) {
     const targets = getCavalryDestinations(fromKey, unit);
     if (!targets.has(toKey)) return false;
   } else {
@@ -1636,6 +1690,7 @@ function rangedAttack(fromKey, toKey) {
 function getMoveTargets(fromKey) {
   const unit = units.get(fromKey);
   if (!unit) return [];
+  if (unit.type === 'lancer') return [...getLancerRouteMap(fromKey, unit).keys()];
   if (isCavalry(unit.type)) return [...getCavalryDestinations(fromKey, unit)];
   return tiles.map(keyOf).filter((toKey) => canMove(fromKey, toKey));
 }
@@ -1679,18 +1734,26 @@ function moveUnit(fromKey, toKey) {
   const nextMoves = unit.type === 'lancer' ? Math.max(0, unit.movesLeft - 1) : (isCavalry(unit.type) ? 0 : Math.max(0, unit.movesLeft - 1));
   const warning = moveEconomyWarning(fromKey, toKey, nextMoves);
 
-  const defeated = units.get(toKey) && units.get(toKey).player !== unit.player;
+  let defeated = units.get(toKey) && units.get(toKey).player !== unit.player;
+  let passThroughDefeat = null;
+  if (unit.type === 'lancer') {
+    const info = getLancerMoveInfo(fromKey, toKey, unit);
+    passThroughDefeat = info?.defeatedKey || null;
+    if (passThroughDefeat && passThroughDefeat !== toKey) defeated = true;
+  }
 
   // Movement never blocked by economy; shortages resolve on turn rollover.
   unit.movesLeft = nextMoves;
   if (defeated && ['crossbow', 'barrage_captain'].includes(unit.type)) unit.actionsLeft = Math.max(0, unit.actionsLeft - 1);
+  if (passThroughDefeat) units.delete(passThroughDefeat);
   units.set(toKey, unit);
   units.delete(fromKey);
   startMoveAnimation(fromKey, toKey, unit);
 
   const { claimText } = applyTileControlAfterMove(destTile, currentPlayer, unit.type, tiles, units);
+  const lancerKillText = passThroughDefeat ? ` pass-through eliminated enemy at ${passThroughDefeat}.` : '';
 
-  lastDebug = `Move ok: ${unit.type} moved to ${toKey}, ${claimText}. ${warning}`.trim();
+  lastDebug = `Move ok: ${unit.type} moved to ${toKey}, ${claimText}.${lancerKillText} ${warning}`.trim();
   revealExpandingTiles();
 }
 
