@@ -90,6 +90,22 @@
   }
 
   function strategicContext(state) {
+<<<<<<< codex/create-simple-browser-based-hex-game-demo-y4q4nl
+    const me = state.currentPlayer || 'red';
+    const opponent = 'blue';
+    const tiles = state.tiles || [];
+    const units = state.units || [];
+    const ownedTiles = tiles.filter((t) => t.owner === me);
+    const myUnits = units.filter((u) => u.player === me);
+    const opponentUnits = units.filter((u) => u.player === opponent);
+    const workers = myUnits.filter((u) => isWorkerClass(unitClass(state, u.type)));
+    const workerCount = workers.length;
+
+    let frontlineThreat = 0;
+    for (const ru of myUnits) {
+      const a = keyToCell(ru.key);
+      for (const bu of opponentUnits) {
+=======
     const tiles = state.tiles || [];
     const units = state.units || [];
     const ownedTiles = tiles.filter((t) => t.owner === 'red');
@@ -102,6 +118,7 @@
     for (const ru of redUnits) {
       const a = keyToCell(ru.key);
       for (const bu of blueUnits) {
+>>>>>>> main
         if (cubeDistance(a, keyToCell(bu.key)) <= 2) {
           frontlineThreat += 1;
           break;
@@ -116,7 +133,11 @@
       for (const toKey of state.legalMovesByUnit?.[w.key] || []) {
         const t = tileMap.get(toKey);
         const prod = state.productionByType?.[t?.type || ''];
+<<<<<<< codex/create-simple-browser-based-hex-game-demo-y4q4nl
+        if (t && t.owner !== me && prod) {
+=======
         if (t && t.owner !== 'red' && prod) {
+>>>>>>> main
           workerCaptureMoves += 1;
           captureMovesByResource[prod] = (captureMovesByResource[prod] || 0) + 1;
         }
@@ -143,7 +164,12 @@
     const prodBy = state.productionByType || {};
     const order = state.resourceOrder || [];
 
+<<<<<<< codex/create-simple-browser-based-hex-game-demo-y4q4nl
+    const me = state.currentPlayer || 'red';
+    const owned = (state.tiles || []).filter((t) => t.owner === me);
+=======
     const owned = (state.tiles || []).filter((t) => t.owner === 'red');
+>>>>>>> main
     const countByType = {};
     for (const t of owned) countByType[t.type] = (countByType[t.type] || 0) + 1;
 
@@ -244,11 +270,20 @@
     if (wood >= livestock && wood >= crops) soldierFocus = 'archer';
     else if (livestock >= wood && livestock >= crops) soldierFocus = 'cavalry';
 
+<<<<<<< codex/create-simple-browser-based-hex-game-demo-y4q4nl
+    const me = state.currentPlayer || 'red';
+    const owned = (state.tiles || []).filter((t) => t.owner === me);
+    const upgradableOwned = owned.filter((t) => (state.upgradePaths?.[t.type] || []).length > 0).length;
+    const workers = (state.units || []).filter((u) => ['worker', 'defworker'].includes(unitClass(state, u.type))).length;
+    const homesteads = owned.filter((t) => t.type === 'homestead').length;
+    const axmen = (state.units || []).filter((u) => u.player === me && u.type === 'axman').length;
+=======
     const owned = (state.tiles || []).filter((t) => t.owner === 'red');
     const upgradableOwned = owned.filter((t) => (state.upgradePaths?.[t.type] || []).length > 0).length;
     const workers = (state.units || []).filter((u) => ['worker', 'defworker'].includes(unitClass(state, u.type))).length;
     const homesteads = owned.filter((t) => t.type === 'homestead').length;
     const axmen = (state.units || []).filter((u) => u.player === 'red' && u.type === 'axman').length;
+>>>>>>> main
     const targetAxmen = homesteads >= 1 ? Math.max(1, homesteads - 1) : 0;
     const needWorkers = upgradableOwned > (workers * 1.3 + 1) || (context?.workerCaptureMoves || 0) > workers;
 
@@ -298,6 +333,16 @@
       `${toCell.q - 1},${toCell.r + 1}`,
     ].filter((k) => {
       const u = unitMap.get(k);
+<<<<<<< codex/create-simple-browser-based-hex-game-demo-y4q4nl
+      return u && u.player === unit.player;
+    }).length;
+
+    let score = 0;
+    if (toTile?.owner && toTile.owner !== unit.player) score += 10;
+    else if (!toTile?.owner) score += 4;
+
+    const isCapturing = toTile && toTile.owner !== unit.player;
+=======
       return u && u.player === 'red';
     }).length;
 
@@ -306,6 +351,7 @@
     else if (!toTile?.owner) score += 4;
 
     const isCapturing = toTile && toTile.owner !== 'red';
+>>>>>>> main
     if (prod === targetResource) score += 12;
     if (prod && balancePlan?.mildCaptureTargets?.has(prod)) score += 9;
     if (prod && balancePlan?.avoidCaptureFrom?.has(prod)) score -= 14;
@@ -318,8 +364,13 @@
       // Workers should stay busy: capture first, then move toward production tiles.
       if (isCapturing && prod) score += 22;
       if (isCapturing && !prod) score += 8;
+<<<<<<< codex/create-simple-browser-based-hex-game-demo-y4q4nl
+      if (toTile?.owner === unit.player && prod === targetResource) score += 5;
+      if (toTile?.owner === unit.player && !prod) score -= 6;
+=======
       if (toTile?.owner === 'red' && prod === targetResource) score += 5;
       if (toTile?.owner === 'red' && !prod) score -= 6;
+>>>>>>> main
     }
 
     // stay grouped
@@ -340,7 +391,11 @@
     const out = [];
 
     for (const unit of state.units || []) {
+<<<<<<< codex/create-simple-browser-based-hex-game-demo-y4q4nl
+      if (unit.player !== state.currentPlayer) continue;
+=======
       if (unit.player !== 'red') continue;
+>>>>>>> main
       const moves = state.legalMovesByUnit?.[unit.key] || [];
       for (const toKey of moves) {
         const score = scoreMove(unit, unit.key, toKey, state, targetResource, tileMap, unitMap, balancePlan);
@@ -354,7 +409,11 @@
   function chooseShotCandidates(state) {
     const out = [];
     for (const unit of state.units || []) {
+<<<<<<< codex/create-simple-browser-based-hex-game-demo-y4q4nl
+      if (unit.player !== state.currentPlayer) continue;
+=======
       if (unit.player !== 'red') continue;
+>>>>>>> main
       const shots = state.legalShotsByUnit?.[unit.key] || [];
       for (const to of shots) out.push({ type: 'shoot', from: unit.key, to, score: 1 + Math.random() });
     }
@@ -459,7 +518,11 @@
       if (fromType === 'town' && toType === 'city') score += 16;
 
       // Push structural progression when early tiers lag behind.
+<<<<<<< codex/create-simple-browser-based-hex-game-demo-y4q4nl
+      const ownedTiles = [...workingTiles.values()].filter((t) => t.owner === me);
+=======
       const ownedTiles = [...workingTiles.values()].filter((t) => t.owner === 'red');
+>>>>>>> main
       const farms = ownedTiles.filter((t) => t.type === 'farm').length;
       const homesteads = ownedTiles.filter((t) => t.type === 'homestead').length;
       const villages = ownedTiles.filter((t) => t.type === 'village').length;
@@ -473,8 +536,13 @@
       if (!t) return 0;
       let score = 0;
       const prod = prodBy[t.type];
+<<<<<<< codex/create-simple-browser-based-hex-game-demo-y4q4nl
+      if (t.owner !== me) {
+        t.owner = me;
+=======
       if (t.owner !== 'red') {
         t.owner = 'red';
+>>>>>>> main
         score += 8;
         if (prod) {
           projectedAvail[prod] = Number(projectedAvail[prod] || 0) + 1;
@@ -491,7 +559,11 @@
       return out;
     }
 
+<<<<<<< codex/create-simple-browser-based-hex-game-demo-y4q4nl
+    const workerUnits = (state.units || []).filter((u) => u.player === me && isWorkerClass(unitClass(state, u.type))).slice(0, 10);
+=======
     const workerUnits = (state.units || []).filter((u) => u.player === 'red' && isWorkerClass(unitClass(state, u.type))).slice(0, 10);
+>>>>>>> main
     for (const unit of workerUnits) {
       const moves = state.legalMovesByUnit?.[unit.key] || [];
       const options = [];
@@ -574,7 +646,11 @@
   }
 
   function chooseCandidates(state) {
+<<<<<<< codex/create-simple-browser-based-hex-game-demo-y4q4nl
+    if (!state || !state.currentPlayer) return [];
+=======
     if (!state || state.currentPlayer !== 'red') return [];
+>>>>>>> main
     const targetResource = pickTargetResource(state);
     const balancePlan = buildResourceBalancePlan(state);
     const context = strategicContext(state);
