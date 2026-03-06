@@ -12,6 +12,7 @@ const modeMenuEl = document.getElementById('mode-menu');
 const start1pBtn = document.getElementById('start-1p');
 const start2pBtn = document.getElementById('start-2p');
 const startEasyAiBtn = document.getElementById('start-easy-ai');
+const aiEnemyCountEl = document.getElementById('ai-enemy-count');
 const startOnlineBtn = document.getElementById('start-online');
 const onlineConnectEl = document.getElementById('online-connect');
 const onlineHostOfferBtn = document.getElementById('online-host-offer');
@@ -30,6 +31,17 @@ const DIRECTIONS = [[1, 0], [1, -1], [0, -1], [-1, 0], [-1, 1], [0, 1]];
 const MAP_RADIUS = 6; // 127 tiles
 const SOLO_START_RADIUS = 2; // 19 tiles
 const ULTRA_MOSAIC = { name: 'Ultra', miniRadius: 5.2 };
+const PLAYER_COLORS = {
+  blue: '#3b82f6',
+  red: '#ef4444',
+  orange: '#f97316',
+  purple: '#a855f7',
+  green: '#22c55e',
+  pink: '#ec4899',
+  gold: '#eab308',
+};
+const AI_PLAYER_ORDER = ['red', 'orange', 'purple', 'green', 'pink', 'gold'];
+
 
 // Spawn distribution from chained percentages driven by primitivity index P.
 // P% forest, then P% of remainder to pasture, then farm, then homestead.
@@ -364,7 +376,7 @@ const unitDescriptions = {
 
 function keyOf(cell) { return `${cell.q},${cell.r}`; }
 function randomType() { return weightedTypes[Math.floor(Math.random() * weightedTypes.length)]; }
-function ownerColor(player) { return player === 'blue' ? '#3b82f6' : player === 'red' ? '#ef4444' : null; }
+function ownerColor(player) { return PLAYER_COLORS[player] || null; }
 
 function blendHex(colorA, colorB, weightA = 0.5) {
   if (!colorA || !colorB) return colorA || colorB || '#888';
@@ -542,6 +554,9 @@ let cellKeys = new Set();
 let tiles = [];
 let units = new Map();
 let gameMode = null; // 'solo' | 'duo' | 'easy-ai' | 'online'
+let aiOpponentCount = 1;
+let aiPlayers = ['red'];
+let turnOrder = ['blue', 'red'];
 let startInProgress = false;
 
 function makeTile(cell) {
@@ -563,7 +578,7 @@ function withinFiniteMap(cell) {
 
 function ensureTile(q, r) {
   const cell = { q, r };
-  if (gameMode === 'duo' && !withinFiniteMap(cell)) return null;
+  if ((gameMode === 'duo' || gameMode === 'online') && !withinFiniteMap(cell)) return null;
   addCellTile(cell);
   return getTile(`${q},${r}`);
 }
@@ -577,6 +592,51 @@ function placeStart(q, r, player, type = 'axman') {
   units.set(`${q},${r}`, { player, type, movesLeft: movePointsFor(type), actionsLeft: actionPointsFor(type) });
 }
 
+function resetTurnActionsForPlayers(players) {
+  for (const player of players) resetTurnActions(player);
+}
+
+function computeEvenAiStarts(center, ringDistance, count) {
+  const starts = [];
+  const seen = new Set();
+  const safeCount = Math.max(1, Math.min(6, count));
+  for (let i = 0; i < safeCount; i += 1) {
+    const angle = (Math.PI * 2 * i) / safeCount;
+    const x = ringDistance * Math.cos(angle);
+    const z = ringDistance * Math.sin(angle);
+
+    let q = Math.round(x);
+    let r = Math.round(z);
+    let sHex = -q - r;
+    const qDiff = Math.abs(q - x);
+    const rDiff = Math.abs(r - z);
+    const sDiff = Math.abs(sHex - (-x - z));
+    if (qDiff > rDiff && qDiff > sDiff) q = -r - sHex;
+    else if (rDiff > sDiff) r = -q - sHex;
+    else sHex = -q - r;
+
+    const key = `${center.q + q},${center.r + r}`;
+    if (!seen.has(key)) {
+      seen.add(key);
+      starts.push({ q: center.q + q, r: center.r + r });
+    }
+  }
+
+  const ringCells = buildRadiusCells(ringDistance).filter((c) => cubeDistance({ q: 0, r: 0 }, c) === ringDistance);
+  let fill = 0;
+  while (starts.length < safeCount && fill < ringCells.length) {
+    const c = ringCells[fill];
+    const key = `${center.q + c.q},${center.r + c.r}`;
+    if (!seen.has(key)) {
+      seen.add(key);
+      starts.push({ q: center.q + c.q, r: center.r + c.r });
+    }
+    fill += 1;
+  }
+
+  return starts;
+}
+
 function setupDuoGame() {
   cells = buildRadiusCells(MAP_RADIUS);
   cellKeys = new Set(cells.map(keyOf));
@@ -586,6 +646,26 @@ function setupDuoGame() {
   placeStart(MAP_RADIUS, -MAP_RADIUS, 'red');
   resetTurnActions('blue');
   resetTurnActions('red');
+}
+
+function setupEasyAiGame(enemyCount = 1) {
+  cells = buildRadiusCells(SOLO_START_RADIUS);
+  cellKeys = new Set(cells.map(keyOf));
+  tiles = cells.map((cell) => makeTile(cell));
+  units = new Map();
+
+  aiOpponentCount = Math.max(1, Math.min(6, Number(enemyCount) || 1));
+  aiPlayers = AI_PLAYER_ORDER.slice(0, aiOpponentCount);
+  turnOrder = ['blue', ...aiPlayers];
+
+  const blueStart = { q: 0, r: 0 };
+  placeStart(blueStart.q, blueStart.r, 'blue');
+
+  const starts = computeEvenAiStarts(blueStart, MAP_RADIUS * 2, aiOpponentCount);
+  starts.forEach((start, idx) => placeStart(start.q, start.r, aiPlayers[idx]));
+
+  resetTurnActionsForPlayers(turnOrder);
+  revealExpandingTiles();
 }
 
 function revealExpandingTiles() {
@@ -626,7 +706,8 @@ function startGame(mode) {
   if (start2pBtn) start2pBtn.disabled = true;
   if (startEasyAiBtn) startEasyAiBtn.disabled = true;
   if (startOnlineBtn) startOnlineBtn.disabled = true;
-  const label = mode === 'solo' ? '1-player' : mode === 'easy-ai' ? 'easy AI' : '2-player';
+  const easyCount = Math.max(1, Math.min(6, Number(aiEnemyCountEl?.value || 1)));
+  const label = mode === 'solo' ? '1-player' : mode === 'easy-ai' ? `easy AI x${easyCount}` : '2-player';
   if (statusText) statusText.textContent = `Starting ${label} game...`;
   if (modeMenuEl) modeMenuEl.classList.add('hidden');
 
@@ -638,13 +719,20 @@ function startGame(mode) {
   lastDebug = mode === 'solo'
     ? 'Solo mode: new tiles reveal as units approach them.'
     : mode === 'easy-ai'
-      ? 'Easy AI mode: red side is controlled by heuristic AI.'
+      ? `Easy AI mode: ${easyCount} opponent${easyCount === 1 ? '' : 's'} controlled by heuristic AI.`
       : '';
   resourceFocus = null;
   resourceHover = null;
   applyPrimitivityIndex(primitivityIndexEl?.value || primitivityIndex);
-  if (mode === 'solo') setupSoloGame(); else setupDuoGame();
-  if (mode === 'easy-ai') revealExpandingTiles();
+  if (mode === 'solo') {
+    turnOrder = ['blue'];
+    setupSoloGame();
+  } else if (mode === 'easy-ai') {
+    setupEasyAiGame(easyCount);
+  } else {
+    turnOrder = ['blue', 'red'];
+    setupDuoGame();
+  }
   render();
   startInProgress = false;
   });
@@ -755,7 +843,7 @@ function aiActionWouldCauseShortage(action, player = 'red') {
 }
 
 function runEasyAiTurn() {
-  if (gameMode !== 'easy-ai' || currentPlayer !== 'red') return;
+  if (gameMode !== 'easy-ai' || currentPlayer === 'blue') return;
   const planner = window.UpKeepEasyAI;
   if (!planner || (!planner.chooseCandidates && !planner.chooseAction)) {
     lastDebug = 'Easy AI unavailable: planner file missing.';
@@ -771,7 +859,7 @@ function runEasyAiTurn() {
 
     let executed = false;
     for (const action of candidates) {
-      if (!action || aiActionWouldCauseShortage(action, 'red')) continue;
+      if (!action || aiActionWouldCauseShortage(action, currentPlayer)) continue;
       if ((action.score || 0) < -60) continue;
 
       if (action.type === 'move' && canMove(action.from, action.to)) {
@@ -803,7 +891,7 @@ function runEasyAiTurn() {
 
   if (!acted) lastDebug = 'Easy AI: no action available; passing turn.';
 
-  const logs = [...enforceShortages('blue'), ...enforceShortages('red')];
+  const logs = turnOrder.flatMap((player) => enforceShortages(player));
   currentPlayer = 'blue';
   resetTurnActions('blue');
   selectedKey = null;
@@ -974,7 +1062,7 @@ function wireDataChannel(channel) {
         upgradeUnitAt(a.key, a.newType);
         changed = before !== units.get(a.key)?.type;
       } else if (a.type === 'end-turn') {
-        const logs = [...enforceShortages('blue'), ...enforceShortages('red')];
+        const logs = turnOrder.flatMap((player) => enforceShortages(player));
         currentPlayer = currentPlayer === 'blue' ? 'red' : 'blue';
         resetTurnActions(currentPlayer);
         revealExpandingTiles();
@@ -2563,7 +2651,7 @@ function render(logs = []) {
       ring.setAttribute('cy', String(pos.y));
       ring.setAttribute('r', '17');
       ring.setAttribute('class', 'unit-ring');
-      ring.setAttribute('fill', unit.player === 'blue' ? '#2563eb' : '#dc2626');
+      ring.setAttribute('fill', ownerColor(unit.player) || '#94a3b8');
       ring.style.stroke = 'none';
       group.appendChild(ring);
 
@@ -2639,7 +2727,7 @@ function render(logs = []) {
       ring.setAttribute('cy', String(y));
       ring.setAttribute('r', '17');
       ring.setAttribute('class', 'unit-ring');
-      ring.setAttribute('fill', anim.unit.player === 'blue' ? '#2563eb' : '#dc2626');
+      ring.setAttribute('fill', ownerColor(anim.unit.player) || '#94a3b8');
       ring.style.stroke = '#ffffff';
       ring.style.strokeWidth = '2.4px';
       group.appendChild(ring);
@@ -2764,27 +2852,46 @@ endTurnBtn.addEventListener('click', () => {
     return;
   }
 
-  if (gameMode === 'easy-ai' && currentPlayer === 'red') {
+  if (gameMode === 'easy-ai' && currentPlayer !== 'blue') {
     lastDebug = 'Wait for AI to complete its turn.';
     render();
     return;
   }
 
-  const logs = gameMode === 'solo'
-    ? [...enforceShortages('blue')]
-    : [...enforceShortages('blue'), ...enforceShortages('red')];
+  const playersForLogs = gameMode === 'solo' ? ['blue'] : turnOrder;
+  const logs = playersForLogs.flatMap((player) => enforceShortages(player));
 
   if (gameMode === 'easy-ai') {
-    currentPlayer = 'red';
-    resetTurnActions('red');
     selectedKey = null;
-    lastDebug = 'AI is thinking...';
+    lastDebug = `AI is thinking (${aiPlayers.length} opponent${aiPlayers.length === 1 ? '' : 's'})...`;
     render(logs);
-    window.setTimeout(runEasyAiTurn, 180);
+
+    const aiQueue = [...aiPlayers];
+    const runNextAi = () => {
+      const next = aiQueue.shift();
+      if (!next) {
+        currentPlayer = 'blue';
+        resetTurnActions('blue');
+        revealExpandingTiles();
+        render(turnOrder.flatMap((player) => enforceShortages(player)));
+        return;
+      }
+      currentPlayer = next;
+      resetTurnActions(next);
+      runEasyAiTurn();
+      window.setTimeout(runNextAi, 120);
+    };
+
+    window.setTimeout(runNextAi, 180);
     return;
   }
 
-  currentPlayer = gameMode === 'solo' ? 'blue' : (currentPlayer === 'blue' ? 'red' : 'blue');
+  if (gameMode === 'solo') {
+    currentPlayer = 'blue';
+  } else {
+    const idx = turnOrder.indexOf(currentPlayer);
+    currentPlayer = turnOrder[(idx + 1) % turnOrder.length] || 'blue';
+  }
   resetTurnActions(currentPlayer);
   revealExpandingTiles();
   selectedKey = null;

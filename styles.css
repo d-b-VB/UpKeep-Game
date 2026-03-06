@@ -38,7 +38,25 @@ body {
 
 .mode-card h2 { margin: 0 0 8px; }
 .mode-card p { margin: 0; color: #cad6ff; line-height: 1.35; }
+
 .mode-actions { margin-top: 14px; display: flex; gap: 8px; }
+.ai-start-row {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.ai-start-row label {
+  font-size: 0.8rem;
+  color: #cbd5e1;
+}
+.ai-start-row select {
+  background: rgba(15, 23, 42, 0.8);
+  color: #e2e8f0;
+  border: 1px solid rgba(148, 163, 184, 0.6);
+  border-radius: 8px;
+  padding: 2px 6px;
+}
+
 
 .game-shell {
   width: 100vw;

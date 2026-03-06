@@ -50,7 +50,18 @@
         <div class="mode-actions">
           <button id="start-1p" type="button">Start 1 Player</button>
           <button id="start-2p" type="button">Start 2 Player</button>
-          <button id="start-easy-ai" type="button">Start vs Easy AI</button>
+          <div class="ai-start-row">
+            <button id="start-easy-ai" type="button">Start vs Easy AI</button>
+            <label for="ai-enemy-count">Enemies</label>
+            <select id="ai-enemy-count" aria-label="Easy AI enemy count">
+              <option value="1" selected>1</option>
+              <option value="2">2</option>
+              <option value="3">3</option>
+              <option value="4">4</option>
+              <option value="5">5</option>
+              <option value="6">6</option>
+            </select>
+          </div>
           <button id="start-online" type="button">Start Online 2 Player</button>
         </div>
         <div class="primitivity-control">
