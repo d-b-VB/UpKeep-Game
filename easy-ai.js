@@ -360,6 +360,7 @@
 
   function buildWorkerOptionBoosts(state, targetResource) {
     const boosts = new Map();
+    const reasons = new Map();
     const tiles = state.tiles || [];
     const tileMap = tileByKey(tiles);
     const avail = state.eco?.available || {};
@@ -371,87 +372,155 @@
       upgradesByKey.get(u.key).push(u.toType);
     }
 
-    function ladderGainScore(fromType, toType) {
+    function projectedScore(projectedAvail) {
+      let score = 0;
+      for (let i = 0; i < order.length - 1; i += 1) {
+        const upper = Number(projectedAvail[order[i]] || 0);
+        const lower = Number(projectedAvail[order[i + 1]] || 0);
+        score += (upper - lower) * 8;
+        if (upper <= lower) score -= 22;
+      }
+      score += Number(projectedAvail.supplies || 0) * 2;
+      score += Number(projectedAvail.crafts || 0) * 2;
+      score += Number(projectedAvail.luxury || 0) * 3;
+      score += Number(projectedAvail.support || 0) * 2;
+      score += Number(projectedAvail.authority || 0) * 2;
+      score += Number(projectedAvail.sovereignty || 0) * 3;
+      return score;
+    }
+
+    function applyUpgrade(projectedAvail, workingTiles, key, toType) {
+      const tile = workingTiles.get(key);
+      if (!tile) return 0;
+      const fromType = tile.type;
       const fromRes = prodBy[fromType];
       const toRes = prodBy[toType];
-      if (!fromRes || !toRes) return 5;
-      const fromIdx = order.indexOf(fromRes);
-      const toIdx = order.indexOf(toRes);
+      if (fromRes) projectedAvail[fromRes] = Number(projectedAvail[fromRes] || 0) - 1;
+      if (toRes) projectedAvail[toRes] = Number(projectedAvail[toRes] || 0) + 1;
+      tile.type = toType;
+
       let score = 0;
-      if (toRes === targetResource) score += 20;
-      if (fromIdx >= 0 && toIdx >= 0) {
-        const fromAvail = Number(avail[fromRes] || 0);
-        const toAvail = Number(avail[toRes] || 0);
-        if (fromAvail >= toAvail + 2) score += 12;
-        if (fromAvail < toAvail) score -= 20;
-      }
+      if (toRes === targetResource) score += 24;
       if (fromType === 'forest' && toType === 'pasture') {
-        const wood = Number(avail.wood || 0);
-        const livestock = Number(avail.livestock || 0);
-        if (wood <= livestock + 1) score -= 45;
+        const wood = Number(projectedAvail.wood || 0);
+        const livestock = Number(projectedAvail.livestock || 0);
+        if (wood <= livestock + 1) score -= 80;
       }
       if (fromType === 'pasture' && toType === 'farm') {
-        const livestock = Number(avail.livestock || 0);
-        const crops = Number(avail.crops || 0);
-        if (livestock >= crops + 2) score += 20;
+        const livestock = Number(projectedAvail.livestock || 0);
+        const crops = Number(projectedAvail.crops || 0);
+        if (livestock >= crops + 1) score += 26;
       }
-      if (fromType === 'farm' && toType === 'homestead' && Number(avail.crops || 0) >= 3) score += 14;
+      if (fromType === 'farm' && toType === 'homestead' && Number(projectedAvail.crops || 0) >= 2) score += 18;
       if (fromType === 'homestead' && ['village', 'manor', 'outpost'].includes(toType)) score += 18;
-      if (fromType === 'village' && toType === 'town') score += 14;
-      if (fromType === 'town' && toType === 'city') score += 14;
+      if (fromType === 'village' && toType === 'town') score += 16;
+      if (fromType === 'town' && toType === 'city') score += 16;
       return score;
     }
 
-    function moveValue(fromKey, toKey) {
-      const t = tileMap.get(toKey);
+    function applyMove(projectedAvail, workingTiles, toKey) {
+      const t = workingTiles.get(toKey);
       if (!t) return 0;
-      const prod = prodBy[t.type];
       let score = 0;
+      const prod = prodBy[t.type];
       if (t.owner !== 'red') {
-        score += 10;
-        if (prod) score += 12;
+        t.owner = 'red';
+        score += 8;
+        if (prod) {
+          projectedAvail[prod] = Number(projectedAvail[prod] || 0) + 1;
+          score += 10;
+          if (prod === targetResource) score += 12;
+        }
       }
-      if (prod === targetResource) score += 10;
       return score;
     }
 
-    for (const unit of state.units || []) {
-      if (unit.player !== 'red') continue;
-      if (!isWorkerClass(unitClass(state, unit.type))) continue;
+    function makeWorkingTiles() {
+      const out = new Map();
+      for (const [k, t] of tileMap.entries()) out.set(k, { ...t });
+      return out;
+    }
+
+    const workerUnits = (state.units || []).filter((u) => u.player === 'red' && isWorkerClass(unitClass(state, u.type))).slice(0, 10);
+    for (const unit of workerUnits) {
       const moves = state.legalMovesByUnit?.[unit.key] || [];
-      const fromTile = tileMap.get(unit.key);
-      const hereUpgrades = (upgradesByKey.get(unit.key) || []).map((toType) => ({ fromType: fromTile?.type, toType }));
+      const options = [];
 
-      let best = null;
-      // upgrade then move
-      for (const up of hereUpgrades) {
-        for (const toKey of moves) {
-          const score = ladderGainScore(up.fromType, up.toType) + moveValue(unit.key, toKey) + 4;
-          const cand = { score, first: { type: 'upgrade-tile', key: unit.key, toType: up.toType }, second: { type: 'move', from: unit.key, to: toKey } };
-          if (!best || cand.score > best.score) best = cand;
-        }
-      }
-      // move then upgrade
+      // stay put, no upgrade
+      options.push({
+        label: `stay ${unit.key} (no upgrade)`,
+        first: null,
+        second: null,
+      });
+
+      // move only (no upgrade)
       for (const toKey of moves) {
-        const toTile = tileMap.get(toKey);
-        const moveScore = moveValue(unit.key, toKey) + 2;
-        if (toTile && toTile.owner === 'red') {
-          const nexts = state.upgradePaths?.[toTile.type] || [];
-          for (const toType of nexts) {
-            const score = moveScore + ladderGainScore(toTile.type, toType);
-            const cand = { score, first: { type: 'move', from: unit.key, to: toKey }, second: { type: 'upgrade-tile', key: toKey, toType } };
-            if (!best || cand.score > best.score) best = cand;
-          }
+        options.push({ label: `move ${unit.key}->${toKey} (no upgrade)`, first: { type: 'move', from: unit.key, to: toKey }, second: null });
+      }
+
+      // upgrade then move
+      for (const toType of (upgradesByKey.get(unit.key) || [])) {
+        for (const toKey of moves) {
+          options.push({
+            label: `upgrade ${unit.key}->${toType}, move to ${toKey}`,
+            first: { type: 'upgrade-tile', key: unit.key, toType },
+            second: { type: 'move', from: unit.key, to: toKey },
+          });
         }
       }
 
-      if (best) {
-        boosts.set(actionId(best.first), (boosts.get(actionId(best.first)) || 0) + 28);
-        boosts.set(actionId(best.second), (boosts.get(actionId(best.second)) || 0) + 11);
+      // move then upgrade (upgrade on arrival if path exists)
+      for (const toKey of moves) {
+        const dest = tileMap.get(toKey);
+        const nexts = state.upgradePaths?.[dest?.type || ''] || [];
+        for (const toType of nexts) {
+          options.push({
+            label: `move ${unit.key}->${toKey}, upgrade ${toKey}->${toType}`,
+            first: { type: 'move', from: unit.key, to: toKey },
+            second: { type: 'upgrade-tile', key: toKey, toType },
+          });
+        }
+      }
+
+      const scored = options.map((opt) => {
+        const projectedAvail = { ...avail };
+        const workingTiles = makeWorkingTiles();
+        let actionScore = 0;
+
+        const applyAction = (a) => {
+          if (!a) return;
+          if (a.type === 'move') actionScore += applyMove(projectedAvail, workingTiles, a.to);
+          if (a.type === 'upgrade-tile') actionScore += applyUpgrade(projectedAvail, workingTiles, a.key, a.toType);
+        };
+
+        applyAction(opt.first);
+        applyAction(opt.second);
+
+        const ladder = projectedScore(projectedAvail);
+        const finalScore = ladder + actionScore;
+        return { ...opt, projectedAvail, finalScore, ladder, actionScore };
+      }).sort((a, b) => b.finalScore - a.finalScore);
+
+      const best = scored[0];
+      const second = scored[1];
+      if (!best) continue;
+
+      const resSnap = `wood:${best.projectedAvail.wood || 0}, livestock:${best.projectedAvail.livestock || 0}, crops:${best.projectedAvail.crops || 0}, provisions:${best.projectedAvail.provisions || 0}`;
+      const reason = `worker ${unit.key} best option = ${best.label} | projected ${resSnap} | score ${best.finalScore.toFixed(1)} (ladder ${best.ladder.toFixed(1)} + action ${best.actionScore.toFixed(1)})${second ? ` vs next ${second.finalScore.toFixed(1)} (${second.label})` : ''}`;
+
+      if (best.first) {
+        const id = actionId(best.first);
+        boosts.set(id, (boosts.get(id) || 0) + 34);
+        reasons.set(id, reason);
+      }
+      if (best.second) {
+        const id2 = actionId(best.second);
+        boosts.set(id2, (boosts.get(id2) || 0) + 16);
+        if (!reasons.has(id2)) reasons.set(id2, reason);
       }
     }
 
-    return boosts;
+    return { boosts, reasons };
   }
 
   function chooseCandidates(state) {
@@ -465,30 +534,25 @@
     let upgrades = chooseUpgradeCandidates(state, targetResource, balancePlan, context);
     let shots = chooseShotCandidates(state);
 
-    const workerBoosts = buildWorkerOptionBoosts(state, targetResource);
-    const applyBoosts = (arr) => arr.map((a) => ({ ...a, score: (a.score || 0) + (workerBoosts.get(actionId(a)) || 0) }))
-      .sort((a, b) => (b.score || 0) - (a.score || 0));
+    const workerEval = buildWorkerOptionBoosts(state, targetResource);
+    const workerBoosts = workerEval.boosts || new Map();
+    const workerReasons = workerEval.reasons || new Map();
+    const applyBoosts = (arr) => arr.map((a) => ({ ...a, score: (a.score || 0) + (workerBoosts.get(actionId(a)) || 0), reason: workerReasons.get(actionId(a)) || a.reason }));
     moves = applyBoosts(moves);
     upgrades = applyBoosts(upgrades);
     trains = applyBoosts(trains);
     shots = applyBoosts(shots);
 
-    // If target resource can be captured now, move first (capture then upgrade is often better).
-    if ((context.captureMovesByResource?.[targetResource] || 0) > 0) {
-      return [...moves, ...upgrades, ...trains, ...shots];
+    // IMPORTANT: compare all actions together by end-state score (not by action-type phase).
+    const all = [...moves, ...upgrades, ...trains, ...shots];
+
+    // Minor tactical nudges only, then global sort.
+    for (const a of all) {
+      if (a.type === 'move' && (context.captureMovesByResource?.[targetResource] || 0) > 0) a.score += 2;
+      if (a.type === 'upgrade-tile' && (context.settlementUpgrades || 0) > 0) a.score += 2;
     }
 
-    // If workers have immediate expansion work, prioritize active board actions over new training.
-    if ((context.workerCaptureMoves || 0) > 0 || (context.settlementUpgrades || 0) > 0) {
-      return [...upgrades, ...moves, ...trains, ...shots];
-    }
-
-    // When a strong surplus exists (e.g., wood >> livestock), push conversion upgrades first.
-    if ((balancePlan.strongUpgradeFrom?.size || 0) > 0) {
-      return [...upgrades, ...moves, ...trains, ...shots];
-    }
-
-    return [...moves, ...upgrades, ...trains, ...shots];
+    return all.sort((a, b) => (b.score || 0) - (a.score || 0));
   }
 
   function chooseAction(state) {

@@ -786,26 +786,26 @@ function runEasyAiTurn() {
 
       if (action.type === 'move' && canMove(action.from, action.to)) {
         moveUnit(action.from, action.to);
-        thoughtLog.push(`step ${i + 1}: chose ${describeAction(action)} | top: ${top}`);
+        thoughtLog.push(`step ${i + 1}: chose ${describeAction(action)} | top: ${top}${action.reason ? `\n  rationale: ${action.reason}` : ''}`);
         acted = true;
         executed = true;
         break;
       }
       if (action.type === 'shoot' && canRangedAttack(action.from, action.to)) {
         rangedAttack(action.from, action.to);
-        thoughtLog.push(`step ${i + 1}: chose ${describeAction(action)} | top: ${top}`);
+        thoughtLog.push(`step ${i + 1}: chose ${describeAction(action)} | top: ${top}${action.reason ? `\n  rationale: ${action.reason}` : ''}`);
         acted = true;
         executed = true;
         break;
       }
       if (action.type === 'train' && trainUnitAt(action.key, action.unitType)) {
-        thoughtLog.push(`step ${i + 1}: chose ${describeAction(action)} | top: ${top}`);
+        thoughtLog.push(`step ${i + 1}: chose ${describeAction(action)} | top: ${top}${action.reason ? `\n  rationale: ${action.reason}` : ''}`);
         acted = true;
         executed = true;
         break;
       }
       if (action.type === 'upgrade-tile' && upgradeTileAt(action.key, action.toType)) {
-        thoughtLog.push(`step ${i + 1}: chose ${describeAction(action)} | top: ${top}`);
+        thoughtLog.push(`step ${i + 1}: chose ${describeAction(action)} | top: ${top}${action.reason ? `\n  rationale: ${action.reason}` : ''}`);
         acted = true;
         executed = true;
         break;
