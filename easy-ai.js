@@ -202,8 +202,21 @@
         if (u.fromType === 'pasture' && u.toType === 'farm') {
           const livestock = Number(avail.livestock || 0);
           const crops = Number(avail.crops || 0);
-          if (livestock >= crops + 2) score += 18;
-          if (livestock >= 2 * Math.max(1, crops)) score += 14;
+          if (livestock >= crops + 2) score += 22;
+          if (livestock >= 2 * Math.max(1, crops)) score += 18;
+        }
+
+        // Continue progression through homesteads/villages when basics are strong.
+        const wood = Number(avail.wood || 0);
+        const livestock = Number(avail.livestock || 0);
+        const crops = Number(avail.crops || 0);
+        const provisions = Number(avail.provisions || 0);
+        if (u.fromType === 'farm' && u.toType === 'homestead') {
+          if (wood >= 5 && livestock >= 4 && crops >= 3 && provisions <= Math.max(2, Math.floor(crops / 2))) score += 28;
+          if (provisions < 2) score += 12;
+        }
+        if (u.fromType === 'homestead' && u.toType === 'village') {
+          if (provisions >= 2 && wood >= 4 && livestock >= 3 && crops >= 2) score += 30;
         }
 
         // Encourage staged progression (few farms -> homestead, few homesteads -> village, etc).
@@ -390,6 +403,14 @@
       if (livestock <= crops) score -= 28;
       if (crops <= provisions) score -= 18;
 
+      const desiredProvisions = Math.max(1, Math.min(
+        Math.floor(Math.max(0, wood - 2)),
+        Math.floor(Math.max(0, livestock - 1)),
+        Math.floor(Math.max(0, crops)),
+      ));
+      const provGap = Number(projectedAvail.provisions || 0) - desiredProvisions;
+      if (provGap < 0) score += provGap * 10;
+
       score += Number(projectedAvail.supplies || 0) * 3;
       score += Number(projectedAvail.crafts || 0) * 3;
       score += Number(projectedAvail.luxury || 0) * 4;
@@ -419,11 +440,21 @@
       if (fromType === 'pasture' && toType === 'farm') {
         const livestock = Number(projectedAvail.livestock || 0);
         const crops = Number(projectedAvail.crops || 0);
-        if (livestock >= crops + 1) score += 30;
-        if (livestock >= crops + 4) score += 16;
+        if (livestock >= crops + 1) score += 34;
+        if (livestock >= crops + 4) score += 20;
       }
-      if (fromType === 'farm' && toType === 'homestead' && Number(projectedAvail.crops || 0) >= 2) score += 18;
-      if (fromType === 'homestead' && ['village', 'manor', 'outpost'].includes(toType)) score += 18;
+      if (fromType === 'farm' && toType === 'homestead') {
+        if (Number(projectedAvail.crops || 0) >= 2) score += 22;
+        const wood = Number(projectedAvail.wood || 0);
+        const livestock = Number(projectedAvail.livestock || 0);
+        const crops = Number(projectedAvail.crops || 0);
+        const provisions = Number(projectedAvail.provisions || 0);
+        if (wood >= 5 && livestock >= 4 && crops >= 3 && provisions <= 3) score += 26;
+      }
+      if (fromType === 'homestead' && ['village', 'manor', 'outpost'].includes(toType)) {
+        score += 18;
+        if (toType === 'village' && Number(projectedAvail.provisions || 0) >= 2) score += 24;
+      }
       if (fromType === 'village' && toType === 'town') score += 16;
       if (fromType === 'town' && toType === 'city') score += 16;
 
