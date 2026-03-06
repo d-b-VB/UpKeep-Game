@@ -138,7 +138,7 @@ const UNIT_DEFS = {
   axman: { emoji: '🪓', cls: 'defworker', terrainUpgrader: true },
   laborer: { emoji: '♠️', cls: 'worker', terrainUpgrader: true },
   architect: { emoji: '📐', cls: 'worker', terrainUpgrader: true },
-  rangehand: { emoji: '🪃', cls: 'archer', terrainUpgrader: false },
+  rangehand: { emoji: 'sling', cls: 'archer', terrainUpgrader: false },
   surveyor: { emoji: '🧭', cls: 'defworker', terrainUpgrader: true },
   constable: { emoji: '♣️', cls: 'defworker', terrainUpgrader: true },
 
@@ -307,6 +307,18 @@ const resourceEmoji = {
   crops: '🌾', wood: '🪵', livestock: '🐑', provisions: '🥕', supplies: '📦',
   crafts: '🛠️', luxury: '💎', support: '🤝', authority: '⚖️', sovereignty: '👑',
 };
+
+const resourceToTileType = {
+  wood: 'forest', livestock: 'pasture', crops: 'farm', provisions: 'homestead',
+  supplies: 'village', crafts: 'town', luxury: 'city',
+  support: 'manor', authority: 'estate', sovereignty: 'palace',
+};
+
+function resourceMosaicHtml(resource) {
+  const tileType = resourceToTileType[resource];
+  const palette = tilePalettes[tileType] || ['#64748b', '#94a3b8', '#cbd5e1'];
+  return `<span class="mosaic-triplet" aria-hidden="true"><span style="background:${palette[0]}"></span><span style="background:${palette[1]}"></span><span style="background:${palette[2]}"></span></span>`;
+}
 
 const tileDescriptions = {
   forest: 'Wood source; naturally closed terrain.',
@@ -1861,7 +1873,7 @@ function renderResources() {
           const chipStyle = isFocused ? 'background:#334155;border-color:#94a3b8;' : 'background:transparent;border-color:#475569;';
           const divider = (k === 'provisions' || k === 'support') ? '<tr class="resource-row-divider"><td colspan="4"></td></tr>' : '';
           return `${divider}<tr>
-            <td><button data-resource-toggle="${k}" style="border:1px solid;${chipStyle}color:#e2e8f0;border-radius:7px;padding:1px 6px;cursor:pointer;">${resourceEmoji[k] || ''}</button> ${k}</td>
+            <td><button data-resource-toggle="${k}" class="resource-toggle-btn" style="border:1px solid;${chipStyle}color:#e2e8f0;border-radius:7px;padding:1px 6px;cursor:pointer;">${resourceMosaicHtml(k)}<span class="resource-emoji">${resourceEmoji[k] || ''}</span></button> ${k}</td>
             <td data-resource-hover="${k}" data-resource-mode="produced" style="text-align:center;cursor:help;">${eco.produced[k]}</td>
             <td data-resource-hover="${k}" data-resource-mode="used" style="text-align:center;cursor:help;">${eco.used[k]}</td>
             <td style="${availStyle}">${avail}</td>
@@ -1908,7 +1920,7 @@ function renderResources() {
 
 function formatCostChip(resource, amount, state = 'new') {
   const emoji = resourceEmoji[resource] || '•';
-  return `<span class="cost-chip ${state}">${emoji} ${amount}</span>`;
+  return `<span class="cost-chip ${state}">${resourceMosaicHtml(resource)}${emoji} ${amount}</span>`;
 }
 
 function missingResourcesForUnitSpawn(player, unitType, key) {
@@ -1966,7 +1978,9 @@ function renderSelectionPanel() {
         costHtml += formatCostChip(res, displayAmt, state);
       }
       costHtml += '</span>';
-      html += `<button class="action-btn ${blocked ? 'blocked' : ''}" data-upgrade-terrain="${toType}" ${blocked ? 'disabled' : ''}>Upgrade Terrain → ${toType}${costHtml}</button>`;
+      const producedRes = productionByType[toType] || null;
+      const producedBadge = producedRes ? `${resourceMosaicHtml(producedRes)}<span class="resource-emoji">${resourceEmoji[producedRes] || ""}</span>` : "";
+      html += `<button class="action-btn ${blocked ? 'blocked' : ''}" data-upgrade-terrain="${toType}" ${blocked ? 'disabled' : ''}>Upgrade Terrain → ${toType} ${producedBadge}${costHtml}</button>`;
       if (showActionHelp) {
         html += `<div class="action-help">${tileDescriptions[toType] || 'Upgrade terrain to unlock next-tier options.'}</div>`;
       }
@@ -2112,8 +2126,29 @@ function renderLancerGlyph(pos) {
   horse.textContent = '🐎';
   g.appendChild(horse);
 
-  // Flipped lance direction.
-  drawSpear(g, pos.x + 12, pos.y + 9, pos.x - 14, pos.y - 12, 4);
+  // Level lance, pointing right.
+  drawSpear(g, pos.x - 15, pos.y - 2, pos.x + 15, pos.y - 2, 3.6);
+  return g;
+}
+
+function renderSlingGlyph(pos) {
+  const g = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+  const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+  path.setAttribute('d', `M ${pos.x - 3} ${pos.y - 11} Q ${pos.x} ${pos.y - 2} ${pos.x + 3} ${pos.y - 11}`);
+  path.setAttribute('fill', 'none');
+  path.setAttribute('stroke', '#f8fafc');
+  path.setAttribute('stroke-width', '2.8');
+  path.setAttribute('stroke-linecap', 'round');
+  g.appendChild(path);
+
+  const rock = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+  rock.setAttribute('cx', String(pos.x));
+  rock.setAttribute('cy', String(pos.y - 6));
+  rock.setAttribute('r', '2.8');
+  rock.setAttribute('fill', '#cbd5e1');
+  rock.setAttribute('stroke', '#0f172a');
+  rock.setAttribute('stroke-width', '1.1');
+  g.appendChild(rock);
   return g;
 }
 
@@ -2217,6 +2252,10 @@ function renderUnitGlyph(unit, pos, group) {
   }
   if (unit.type === 'royal_knight') {
     group.appendChild(renderRoyalKnightGlyph(pos));
+    return;
+  }
+  if (unit.type === 'rangehand') {
+    group.appendChild(renderSlingGlyph(pos));
     return;
   }
   const emoji = UNIT_DEFS[unit.type]?.emoji || '❓';
@@ -2816,4 +2855,30 @@ if (boardWrap) {
   });
 }
 
+function initInstructionDiagrams() {
+  const upkeepInfo = {
+    forest: 'Produces wood. No structure upkeep.',
+    pasture: 'Produces livestock. No structure upkeep.',
+    farm: 'Produces crops. No structure upkeep.',
+    homestead: 'Produces provisions. Gateway to 3 branches.',
+    village: 'Upkeep: 1 wood.',
+    town: 'Upkeep: 1 wood, 1 crops, 1 supplies.',
+    city: 'Upkeep: 1 wood, 1 crops, 1 livestock, 1 supplies, 1 crafts.',
+    manor: 'Upkeep: 1 supplies.',
+    estate: 'Upkeep: 1 support, 1 supplies, 1 crafts.',
+    palace: 'Upkeep: 1 authority, 1 support, 1 supplies, 1 crafts, 1 luxury.',
+    outpost: 'Requires village support. Closed to enemies.',
+    stronghold: 'Requires town support. Adjacent tiles closed to enemies.',
+    keep: 'Requires city support. Adjacent military upkeep relief.',
+  };
+  document.querySelectorAll('[data-upkeep-target]').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const target = btn.getAttribute('data-upkeep-target');
+      const panel = btn.closest('.progression-diagram')?.querySelector('.diagram-info');
+      if (panel) panel.textContent = upkeepInfo[target] || 'No data.';
+    });
+  });
+}
+
+initInstructionDiagrams();
 render();
