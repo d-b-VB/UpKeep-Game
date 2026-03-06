@@ -312,23 +312,23 @@ button:disabled { opacity: 0.45; cursor: not-allowed; }
   margin-right: 2px;
 }
 
-.mosaic-triangle {
+.mosaic-hexcluster {
   position: absolute;
   inset: 0;
 }
 
-.mosaic-triangle > span {
+.mosaic-hexcluster > span {
   position: absolute;
-  width: 7px;
-  height: 7px;
-  border-radius: 2px;
+  width: 8px;
+  height: 8px;
+  clip-path: polygon(25% 0%, 75% 0%, 100% 50%, 75% 100%, 25% 100%, 0% 50%);
   border: 1px solid rgba(15, 23, 42, 0.28);
   opacity: 0.95;
 }
 
-.mosaic-triangle > span:nth-child(1) { left: 1px; top: 8px; }
-.mosaic-triangle > span:nth-child(2) { right: 1px; top: 8px; }
-.mosaic-triangle > span:nth-child(3) { left: 4.5px; top: 1px; }
+.mosaic-hexcluster > span:nth-child(1) { left: 0px; top: 6px; }
+.mosaic-hexcluster > span:nth-child(2) { right: 0px; top: 6px; }
+.mosaic-hexcluster > span:nth-child(3) { left: 4px; top: 0px; }
 
 .progression-diagram {
   margin-top: 10px;

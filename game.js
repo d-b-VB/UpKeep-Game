@@ -317,7 +317,7 @@ const resourceToTileType = {
 function resourceMosaicHtml(resource) {
   const tileType = resourceToTileType[resource];
   const palette = tilePalettes[tileType] || ['#64748b', '#94a3b8', '#cbd5e1'];
-  return `<span class="mosaic-triangle" aria-hidden="true"><span style="background:${palette[0]}"></span><span style="background:${palette[1]}"></span><span style="background:${palette[2]}"></span></span>`;
+  return `<span class="mosaic-hexcluster" aria-hidden="true"><span style="background:${palette[0]}"></span><span style="background:${palette[1]}"></span><span style="background:${palette[2]}"></span></span>`;
 }
 
 function resourceEmojiWithMosaic(resource) {
@@ -779,10 +779,14 @@ function runEasyAiTurn() {
       ? planner.chooseCandidates(state)
       : [planner.chooseAction(state)].filter(Boolean);
 
-    const top = candidates.slice(0, 3).map((c, idx) => `${idx + 1}) ${describeAction(c)} [${Number(c.score || 0).toFixed(1)}]`).join('; ');
+    const top = candidates.slice(0, 3).map((c, idx) => {
+      const why = c.reason ? ` | why: ${String(c.reason).slice(0, 180)}` : '';
+      return `${idx + 1}) ${describeAction(c)} [${Number(c.score || 0).toFixed(1)}]${why}`;
+    }).join('; ');
     let executed = false;
     for (const action of candidates) {
       if (!action || aiActionWouldCauseShortage(action, 'red')) continue;
+      if ((action.score || 0) < -60) continue;
 
       if (action.type === 'move' && canMove(action.from, action.to)) {
         moveUnit(action.from, action.to);

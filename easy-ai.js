@@ -377,15 +377,25 @@
       for (let i = 0; i < order.length - 1; i += 1) {
         const upper = Number(projectedAvail[order[i]] || 0);
         const lower = Number(projectedAvail[order[i + 1]] || 0);
-        score += (upper - lower) * 8;
-        if (upper <= lower) score -= 22;
+        score += (upper - lower) * 10;
+        if (upper <= lower) score -= 30;
       }
-      score += Number(projectedAvail.supplies || 0) * 2;
-      score += Number(projectedAvail.crafts || 0) * 2;
-      score += Number(projectedAvail.luxury || 0) * 3;
-      score += Number(projectedAvail.support || 0) * 2;
-      score += Number(projectedAvail.authority || 0) * 2;
-      score += Number(projectedAvail.sovereignty || 0) * 3;
+
+      // Hard-balance pressure on core early resources.
+      const wood = Number(projectedAvail.wood || 0);
+      const livestock = Number(projectedAvail.livestock || 0);
+      const crops = Number(projectedAvail.crops || 0);
+      const provisions = Number(projectedAvail.provisions || 0);
+      if (wood <= livestock) score -= 40;
+      if (livestock <= crops) score -= 28;
+      if (crops <= provisions) score -= 18;
+
+      score += Number(projectedAvail.supplies || 0) * 3;
+      score += Number(projectedAvail.crafts || 0) * 3;
+      score += Number(projectedAvail.luxury || 0) * 4;
+      score += Number(projectedAvail.support || 0) * 3;
+      score += Number(projectedAvail.authority || 0) * 3;
+      score += Number(projectedAvail.sovereignty || 0) * 4;
       return score;
     }
 
@@ -404,17 +414,26 @@
       if (fromType === 'forest' && toType === 'pasture') {
         const wood = Number(projectedAvail.wood || 0);
         const livestock = Number(projectedAvail.livestock || 0);
-        if (wood <= livestock + 1) score -= 80;
+        if (wood <= livestock + 1) score -= 120;
       }
       if (fromType === 'pasture' && toType === 'farm') {
         const livestock = Number(projectedAvail.livestock || 0);
         const crops = Number(projectedAvail.crops || 0);
-        if (livestock >= crops + 1) score += 26;
+        if (livestock >= crops + 1) score += 30;
+        if (livestock >= crops + 4) score += 16;
       }
       if (fromType === 'farm' && toType === 'homestead' && Number(projectedAvail.crops || 0) >= 2) score += 18;
       if (fromType === 'homestead' && ['village', 'manor', 'outpost'].includes(toType)) score += 18;
       if (fromType === 'village' && toType === 'town') score += 16;
       if (fromType === 'town' && toType === 'city') score += 16;
+
+      // Push structural progression when early tiers lag behind.
+      const ownedTiles = [...workingTiles.values()].filter((t) => t.owner === 'red');
+      const farms = ownedTiles.filter((t) => t.type === 'farm').length;
+      const homesteads = ownedTiles.filter((t) => t.type === 'homestead').length;
+      const villages = ownedTiles.filter((t) => t.type === 'village').length;
+      if (fromType === 'farm' && toType === 'homestead' && homesteads < Math.max(1, Math.floor(farms / 4))) score += 20;
+      if (fromType === 'homestead' && toType === 'village' && villages < Math.max(1, Math.floor(homesteads / 3))) score += 24;
       return score;
     }
 
@@ -506,7 +525,7 @@
       if (!best) continue;
 
       const resSnap = `wood:${best.projectedAvail.wood || 0}, livestock:${best.projectedAvail.livestock || 0}, crops:${best.projectedAvail.crops || 0}, provisions:${best.projectedAvail.provisions || 0}`;
-      const reason = `worker ${unit.key} best option = ${best.label} | projected ${resSnap} | score ${best.finalScore.toFixed(1)} (ladder ${best.ladder.toFixed(1)} + action ${best.actionScore.toFixed(1)})${second ? ` vs next ${second.finalScore.toFixed(1)} (${second.label})` : ''}`;
+      const reason = `worker ${unit.key} evaluated ${scored.length} options; best = ${best.label} | projected ${resSnap} | score ${best.finalScore.toFixed(1)} (ladder ${best.ladder.toFixed(1)} + action ${best.actionScore.toFixed(1)})${second ? ` vs next ${second.finalScore.toFixed(1)} (${second.label})` : ''}`;
 
       if (best.first) {
         const id = actionId(best.first);
