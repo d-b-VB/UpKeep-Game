@@ -1896,9 +1896,8 @@ function renderResources() {
           const chipStyle = isFocused ? 'background:#334155;border-color:#94a3b8;' : 'background:transparent;border-color:#475569;';
           const divider = (k === 'provisions' || k === 'support') ? '<tr class="resource-row-divider"><td colspan="4"></td></tr>' : '';
           return `${divider}<tr>
-            <td><button data-resource-toggle="${k}" class="resource-toggle-btn" style="border:1px solid;${chipStyle}color:#e2e8f0;border-radius:7px;padding:1px 6px;cursor:pointer;">${resourceMosaicHtml(k)}<span class="resource-emoji">${resourceEmoji[k] || ''}</span></button> ${k}</td>
-            <td data-resource-hover="${k}" data-resource-mode="produced" style="text-align:center;cursor:help;">${eco.produced[k]}</td>
-            <td data-resource-hover="${k}" data-resource-mode="used" style="text-align:center;cursor:help;">${eco.used[k]}</td>
+            <td><button data-resource-toggle="${k}" class="resource-toggle-btn" style="border:1px solid;${chipStyle}color:#e2e8f0;border-radius:7px;padding:1px 6px;cursor:pointer;">${resourceEmojiWithMosaic(k)}</button> ${k}</td>
+            <td data-resource-hover="${k}" data-resource-mode="produced" style="text-align:center;cursor:help;">${eco.produced[k]} / ${eco.used[k]}</td>
             <td style="${availStyle}">${avail}</td>
           </tr>`;
         }).join('')}
@@ -2895,8 +2894,15 @@ function initInstructionDiagrams() {
     keep: 'Requires city support. Adjacent military upkeep relief.',
   };
   document.querySelectorAll('[data-upkeep-target]').forEach((btn) => {
+    const target = btn.getAttribute('data-upkeep-target');
+    if (!btn.dataset.mosaicDecorated && tilePalettes[target]) {
+      btn.dataset.mosaicDecorated = '1';
+      const label = btn.textContent.trim();
+      const palette = tilePalettes[target];
+      btn.innerHTML = `<span class="diagram-tile-triangle" aria-hidden="true"><span style="background:${palette[0]}"></span><span style="background:${palette[1]}"></span><span style="background:${palette[2]}"></span></span><span class="diagram-label">${label}</span>`;
+    }
+
     btn.addEventListener('click', () => {
-      const target = btn.getAttribute('data-upkeep-target');
       const panel = btn.closest('.progression-diagram')?.querySelector('.diagram-info');
       if (panel) panel.textContent = upkeepInfo[target] || 'No data.';
     });

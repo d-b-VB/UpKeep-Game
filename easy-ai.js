@@ -109,11 +109,12 @@
       }
     }
 
+    const tileMap = tileByKey(tiles);
     let workerCaptureMoves = 0;
     const captureMovesByResource = {};
     for (const w of workers) {
       for (const toKey of state.legalMovesByUnit?.[w.key] || []) {
-        const t = tiles.find((x) => x.key === toKey);
+        const t = tileMap.get(toKey);
         const prod = state.productionByType?.[t?.type || ''];
         if (t && t.owner !== 'red' && prod) {
           workerCaptureMoves += 1;
@@ -275,9 +276,14 @@
     const toCell = keyToCell(toKey);
     const cls = unitClass(state, unit.type);
     const prod = state.productionByType?.[toTile?.type || ''];
-    const friendlyAdj = (state.cells || []).filter((c) => {
-      const k = `${c.q},${c.r}`;
-      if (cubeDistance(c, toCell) !== 1) return false;
+    const friendlyAdj = [
+      `${toCell.q + 1},${toCell.r}`,
+      `${toCell.q - 1},${toCell.r}`,
+      `${toCell.q},${toCell.r + 1}`,
+      `${toCell.q},${toCell.r - 1}`,
+      `${toCell.q + 1},${toCell.r - 1}`,
+      `${toCell.q - 1},${toCell.r + 1}`,
+    ].filter((k) => {
       const u = unitMap.get(k);
       return u && u.player === 'red';
     }).length;
