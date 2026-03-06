@@ -762,16 +762,6 @@ function runEasyAiTurn() {
     return;
   }
 
-  const thoughtLog = [];
-  function describeAction(a) {
-    if (!a) return 'none';
-    if (a.type === 'move') return `move ${a.from}→${a.to}`;
-    if (a.type === 'upgrade-tile') return `upgrade ${a.key}→${a.toType}`;
-    if (a.type === 'train') return `train ${a.unitType} @ ${a.key}`;
-    if (a.type === 'shoot') return `shoot ${a.from}→${a.to}`;
-    return a.type;
-  }
-
   let acted = false;
   for (let i = 0; i < 18; i += 1) {
     const state = buildEasyAiState();
@@ -779,10 +769,6 @@ function runEasyAiTurn() {
       ? planner.chooseCandidates(state)
       : [planner.chooseAction(state)].filter(Boolean);
 
-    const top = candidates.slice(0, 3).map((c, idx) => {
-      const why = c.reason ? ` | why: ${String(c.reason).slice(0, 180)}` : '';
-      return `${idx + 1}) ${describeAction(c)} [${Number(c.score || 0).toFixed(1)}]${why}`;
-    }).join('; ');
     let executed = false;
     for (const action of candidates) {
       if (!action || aiActionWouldCauseShortage(action, 'red')) continue;
@@ -790,40 +776,32 @@ function runEasyAiTurn() {
 
       if (action.type === 'move' && canMove(action.from, action.to)) {
         moveUnit(action.from, action.to);
-        thoughtLog.push(`step ${i + 1}: chose ${describeAction(action)} | top: ${top}${action.reason ? `\n  rationale: ${action.reason}` : ''}`);
         acted = true;
         executed = true;
         break;
       }
       if (action.type === 'shoot' && canRangedAttack(action.from, action.to)) {
         rangedAttack(action.from, action.to);
-        thoughtLog.push(`step ${i + 1}: chose ${describeAction(action)} | top: ${top}${action.reason ? `\n  rationale: ${action.reason}` : ''}`);
         acted = true;
         executed = true;
         break;
       }
       if (action.type === 'train' && trainUnitAt(action.key, action.unitType)) {
-        thoughtLog.push(`step ${i + 1}: chose ${describeAction(action)} | top: ${top}${action.reason ? `\n  rationale: ${action.reason}` : ''}`);
         acted = true;
         executed = true;
         break;
       }
       if (action.type === 'upgrade-tile' && upgradeTileAt(action.key, action.toType)) {
-        thoughtLog.push(`step ${i + 1}: chose ${describeAction(action)} | top: ${top}${action.reason ? `\n  rationale: ${action.reason}` : ''}`);
         acted = true;
         executed = true;
         break;
       }
     }
 
-    if (!executed) {
-      thoughtLog.push(`step ${i + 1}: no executable action | top: ${top || 'none'}`);
-      break;
-    }
+    if (!executed) break;
   }
 
   if (!acted) lastDebug = 'Easy AI: no action available; passing turn.';
-  if (thoughtLog.length) lastDebug = `AI thought process:\n${thoughtLog.join('\n')}`;
 
   const logs = [...enforceShortages('blue'), ...enforceShortages('red')];
   currentPlayer = 'blue';
@@ -2160,17 +2138,18 @@ function renderLancerGlyph(pos) {
 function renderSlingGlyph(pos) {
   const g = document.createElementNS('http://www.w3.org/2000/svg', 'g');
   const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
-  path.setAttribute('d', `M ${pos.x - 3} ${pos.y - 11} Q ${pos.x} ${pos.y - 2} ${pos.x + 3} ${pos.y - 11}`);
+  // Ends close together at top; long hanging straps to cradle.
+  path.setAttribute('d', `M ${pos.x - 1.6} ${pos.y - 13} C ${pos.x - 2.4} ${pos.y - 8}, ${pos.x - 4.8} ${pos.y - 3}, ${pos.x} ${pos.y + 2} C ${pos.x + 4.8} ${pos.y - 3}, ${pos.x + 2.4} ${pos.y - 8}, ${pos.x + 1.6} ${pos.y - 13}`);
   path.setAttribute('fill', 'none');
   path.setAttribute('stroke', '#f8fafc');
-  path.setAttribute('stroke-width', '2.8');
+  path.setAttribute('stroke-width', '2.5');
   path.setAttribute('stroke-linecap', 'round');
   g.appendChild(path);
 
   const rock = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
   rock.setAttribute('cx', String(pos.x));
-  rock.setAttribute('cy', String(pos.y - 6));
-  rock.setAttribute('r', '2.8');
+  rock.setAttribute('cy', String(pos.y + 0.8));
+  rock.setAttribute('r', '2.6');
   rock.setAttribute('fill', '#cbd5e1');
   rock.setAttribute('stroke', '#0f172a');
   rock.setAttribute('stroke-width', '1.1');
