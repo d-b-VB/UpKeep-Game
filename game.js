@@ -317,7 +317,11 @@ const resourceToTileType = {
 function resourceMosaicHtml(resource) {
   const tileType = resourceToTileType[resource];
   const palette = tilePalettes[tileType] || ['#64748b', '#94a3b8', '#cbd5e1'];
-  return `<span class="mosaic-triplet" aria-hidden="true"><span style="background:${palette[0]}"></span><span style="background:${palette[1]}"></span><span style="background:${palette[2]}"></span></span>`;
+  return `<span class="mosaic-triangle" aria-hidden="true"><span style="background:${palette[0]}"></span><span style="background:${palette[1]}"></span><span style="background:${palette[2]}"></span></span>`;
+}
+
+function resourceEmojiWithMosaic(resource) {
+  return `<span class="resource-emoji-wrap">${resourceMosaicHtml(resource)}<span class="resource-emoji">${resourceEmoji[resource] || ''}</span></span>`;
 }
 
 const tileDescriptions = {
@@ -758,6 +762,16 @@ function runEasyAiTurn() {
     return;
   }
 
+  const thoughtLog = [];
+  function describeAction(a) {
+    if (!a) return 'none';
+    if (a.type === 'move') return `move ${a.from}→${a.to}`;
+    if (a.type === 'upgrade-tile') return `upgrade ${a.key}→${a.toType}`;
+    if (a.type === 'train') return `train ${a.unitType} @ ${a.key}`;
+    if (a.type === 'shoot') return `shoot ${a.from}→${a.to}`;
+    return a.type;
+  }
+
   let acted = false;
   for (let i = 0; i < 18; i += 1) {
     const state = buildEasyAiState();
@@ -765,38 +779,47 @@ function runEasyAiTurn() {
       ? planner.chooseCandidates(state)
       : [planner.chooseAction(state)].filter(Boolean);
 
+    const top = candidates.slice(0, 3).map((c, idx) => `${idx + 1}) ${describeAction(c)} [${Number(c.score || 0).toFixed(1)}]`).join('; ');
     let executed = false;
     for (const action of candidates) {
       if (!action || aiActionWouldCauseShortage(action, 'red')) continue;
 
       if (action.type === 'move' && canMove(action.from, action.to)) {
         moveUnit(action.from, action.to);
+        thoughtLog.push(`step ${i + 1}: chose ${describeAction(action)} | top: ${top}`);
         acted = true;
         executed = true;
         break;
       }
       if (action.type === 'shoot' && canRangedAttack(action.from, action.to)) {
         rangedAttack(action.from, action.to);
+        thoughtLog.push(`step ${i + 1}: chose ${describeAction(action)} | top: ${top}`);
         acted = true;
         executed = true;
         break;
       }
       if (action.type === 'train' && trainUnitAt(action.key, action.unitType)) {
+        thoughtLog.push(`step ${i + 1}: chose ${describeAction(action)} | top: ${top}`);
         acted = true;
         executed = true;
         break;
       }
       if (action.type === 'upgrade-tile' && upgradeTileAt(action.key, action.toType)) {
+        thoughtLog.push(`step ${i + 1}: chose ${describeAction(action)} | top: ${top}`);
         acted = true;
         executed = true;
         break;
       }
     }
 
-    if (!executed) break;
+    if (!executed) {
+      thoughtLog.push(`step ${i + 1}: no executable action | top: ${top || 'none'}`);
+      break;
+    }
   }
 
   if (!acted) lastDebug = 'Easy AI: no action available; passing turn.';
+  if (thoughtLog.length) lastDebug = `AI thought process:\n${thoughtLog.join('\n')}`;
 
   const logs = [...enforceShortages('blue'), ...enforceShortages('red')];
   currentPlayer = 'blue';
@@ -1864,7 +1887,7 @@ function renderResources() {
   resourcesEl.innerHTML = `
     <strong>${currentPlayer.toUpperCase()} economy</strong>
     <table style="width:100%;font-size:12px;border-collapse:collapse;margin-top:6px;">
-      <thead><tr><th style="text-align:left;">Resource</th><th>Prod</th><th>Use</th><th>Avail</th></tr></thead>
+      <thead><tr><th style="text-align:left;">Resource</th><th>Produced / Used</th><th>Avail</th></tr></thead>
       <tbody>
         ${resourceKeys.map((k) => {
           const avail = eco.available[k];
@@ -1881,7 +1904,7 @@ function renderResources() {
         }).join('')}
       </tbody>
     </table>
-    <div style="margin-top:6px;font-size:12px;opacity:.85;">Click resource emoji to cycle production/usage highlights. Hover Prod/Use numbers for temporary highlight.</div>
+    <div style="margin-top:6px;font-size:12px;opacity:.85;">Click resource emoji to cycle production/usage highlights. Hover Produced/Used for temporary highlight.</div>
   `;
 
   resourcesEl.querySelectorAll('[data-resource-toggle]').forEach((btn) => {
@@ -1920,7 +1943,7 @@ function renderResources() {
 
 function formatCostChip(resource, amount, state = 'new') {
   const emoji = resourceEmoji[resource] || '•';
-  return `<span class="cost-chip ${state}">${resourceMosaicHtml(resource)}${emoji} ${amount}</span>`;
+  return `<span class="cost-chip ${state}">${resourceEmojiWithMosaic(resource)} ${amount}</span>`;
 }
 
 function missingResourcesForUnitSpawn(player, unitType, key) {
@@ -1979,7 +2002,7 @@ function renderSelectionPanel() {
       }
       costHtml += '</span>';
       const producedRes = productionByType[toType] || null;
-      const producedBadge = producedRes ? `${resourceMosaicHtml(producedRes)}<span class="resource-emoji">${resourceEmoji[producedRes] || ""}</span>` : "";
+      const producedBadge = producedRes ? resourceEmojiWithMosaic(producedRes) : "";
       html += `<button class="action-btn ${blocked ? 'blocked' : ''}" data-upgrade-terrain="${toType}" ${blocked ? 'disabled' : ''}>Upgrade Terrain → ${toType} ${producedBadge}${costHtml}</button>`;
       if (showActionHelp) {
         html += `<div class="action-help">${tileDescriptions[toType] || 'Upgrade terrain to unlock next-tier options.'}</div>`;
@@ -2033,7 +2056,7 @@ function renderSelectionPanel() {
     }
   }
 
-  html += `<div style="margin-top:8px;font-size:12px;opacity:.9;"><strong>Debug:</strong> ${lastDebug || '—'}</div>`;
+  html += `<div style="margin-top:8px;font-size:12px;opacity:.9;white-space:pre-wrap;"><strong>Debug:</strong> ${lastDebug || '—'}</div>`;
 
   selectionEl.innerHTML = html;
   selectionEl.querySelectorAll('button[data-upgrade-terrain]').forEach((btn) => {
