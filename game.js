@@ -853,9 +853,16 @@ function runEasyAiTurn() {
   let acted = false;
   for (let i = 0; i < 18; i += 1) {
     const state = buildEasyAiState();
-    const candidates = planner.chooseCandidates
-      ? planner.chooseCandidates(state)
-      : [planner.chooseAction(state)].filter(Boolean);
+    let candidates = [];
+    try {
+      candidates = planner.chooseCandidates
+        ? planner.chooseCandidates(state)
+        : [planner.chooseAction(state)].filter(Boolean);
+    } catch (error) {
+      lastDebug = `Easy AI planner error (${currentPlayer}): ${error?.message || error}`;
+      break;
+    }
+    if (!Array.isArray(candidates) || !candidates.length) break;
 
     let executed = false;
     for (const action of candidates) {
@@ -2878,7 +2885,11 @@ endTurnBtn.addEventListener('click', () => {
       }
       currentPlayer = next;
       resetTurnActions(next);
-      runEasyAiTurn();
+      try {
+        runEasyAiTurn();
+      } catch (error) {
+        lastDebug = `AI turn error (${next}): ${error?.message || error}`;
+      }
       window.setTimeout(runNextAi, 120);
     };
 

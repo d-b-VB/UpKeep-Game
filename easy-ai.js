@@ -119,7 +119,6 @@
         const t = tileMap.get(toKey);
         const prod = state.productionByType?.[t?.type || ''];
         if (t && t.owner !== me && prod) {
-        if (t && t.owner !== me && prod) {
           workerCaptureMoves += 1;
           captureMovesByResource[prod] = (captureMovesByResource[prod] || 0) + 1;
         }
@@ -148,9 +147,6 @@
 
     const me = state.currentPlayer || 'red';
     const owned = (state.tiles || []).filter((t) => t.owner === me);
-    const me = state.currentPlayer || 'red';
-    const owned = (state.tiles || []).filter((t) => t.owner === me);
-
     const countByType = {};
     for (const t of owned) countByType[t.type] = (countByType[t.type] || 0) + 1;
 
@@ -257,7 +253,6 @@
     const workers = (state.units || []).filter((u) => ['worker', 'defworker'].includes(unitClass(state, u.type))).length;
     const homesteads = owned.filter((t) => t.type === 'homestead').length;
     const axmen = (state.units || []).filter((u) => u.player === me && u.type === 'axman').length;
-
     const targetAxmen = homesteads >= 1 ? Math.max(1, homesteads - 1) : 0;
     const needWorkers = upgradableOwned > (workers * 1.3 + 1) || (context?.workerCaptureMoves || 0) > workers;
 
@@ -315,7 +310,6 @@
     else if (!toTile?.owner) score += 4;
 
     const isCapturing = toTile && toTile.owner !== unit.player;
-
     if (prod === targetResource) score += 12;
     if (prod && balancePlan?.mildCaptureTargets?.has(prod)) score += 9;
     if (prod && balancePlan?.avoidCaptureFrom?.has(prod)) score -= 14;
@@ -330,9 +324,6 @@
       if (isCapturing && !prod) score += 8;
       if (toTile?.owner === unit.player && prod === targetResource) score += 5;
       if (toTile?.owner === unit.player && !prod) score -= 6;
-      if (toTile?.owner === unit.player && prod === targetResource) score += 5;
-      if (toTile?.owner === unit.player && !prod) score -= 6;
-
     }
 
     // stay grouped
@@ -354,7 +345,6 @@
 
     for (const unit of state.units || []) {
       if (unit.player !== state.currentPlayer) continue;
-      if (unit.player !== state.currentPlayer) continue;
       const moves = state.legalMovesByUnit?.[unit.key] || [];
       for (const toKey of moves) {
         const score = scoreMove(unit, unit.key, toKey, state, targetResource, tileMap, unitMap, balancePlan);
@@ -368,7 +358,6 @@
   function chooseShotCandidates(state) {
     const out = [];
     for (const unit of state.units || []) {
-      if (unit.player !== state.currentPlayer) continue;
       if (unit.player !== state.currentPlayer) continue;
       const shots = state.legalShotsByUnit?.[unit.key] || [];
       for (const to of shots) out.push({ type: 'shoot', from: unit.key, to, score: 1 + Math.random() });
@@ -476,7 +465,6 @@
 
       // Push structural progression when early tiers lag behind.
       const ownedTiles = [...workingTiles.values()].filter((t) => t.owner === me);
-      const ownedTiles = [...workingTiles.values()].filter((t) => t.owner === me);
       const farms = ownedTiles.filter((t) => t.type === 'farm').length;
       const homesteads = ownedTiles.filter((t) => t.type === 'homestead').length;
       const villages = ownedTiles.filter((t) => t.type === 'village').length;
@@ -490,8 +478,6 @@
       if (!t) return 0;
       let score = 0;
       const prod = prodBy[t.type];
-      if (t.owner !== me) {
-        t.owner = me;
       if (t.owner !== me) {
         t.owner = me;
         score += 8;
@@ -510,7 +496,6 @@
       return out;
     }
 
-    const workerUnits = (state.units || []).filter((u) => u.player === me && isWorkerClass(unitClass(state, u.type))).slice(0, 10);
     const workerUnits = (state.units || []).filter((u) => u.player === me && isWorkerClass(unitClass(state, u.type))).slice(0, 10);
     for (const unit of workerUnits) {
       const moves = state.legalMovesByUnit?.[unit.key] || [];
@@ -594,7 +579,6 @@
   }
 
   function chooseCandidates(state) {
-    if (!state || !state.currentPlayer) return [];
     if (!state || !state.currentPlayer) return [];
     const targetResource = pickTargetResource(state);
     const balancePlan = buildResourceBalancePlan(state);
