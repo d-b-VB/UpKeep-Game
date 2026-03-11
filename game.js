@@ -8,6 +8,7 @@ const zoomOutBtn = document.getElementById('zoom-out');
 const zoomResetBtn = document.getElementById('zoom-reset');
 const zoomInBtn = document.getElementById('zoom-in');
 const helpToggleBtn = document.getElementById('help-toggle');
+const aiTurnIndicatorEl = document.getElementById('ai-turn-indicator');
 const modeMenuEl = document.getElementById('mode-menu');
 const start1pBtn = document.getElementById('start-1p');
 const start2pBtn = document.getElementById('start-2p');
@@ -152,7 +153,7 @@ const UNIT_DEFS = {
   architect: { emoji: '📐', cls: 'worker', terrainUpgrader: true },
   rangehand: { emoji: 'sling', cls: 'archer', terrainUpgrader: false },
   surveyor: { emoji: '🧭', cls: 'defworker', terrainUpgrader: true },
-  constable: { emoji: '♣️', cls: 'defworker', terrainUpgrader: true },
+  constable: { emoji: '♠️', cls: 'defworker', terrainUpgrader: false },
 
   spearman: { emoji: 'spear', cls: 'infantry', terrainUpgrader: false },
   swordsman: { emoji: '⚔️', cls: 'infantry', terrainUpgrader: false },
@@ -377,6 +378,44 @@ const unitDescriptions = {
 function keyOf(cell) { return `${cell.q},${cell.r}`; }
 function randomType() { return weightedTypes[Math.floor(Math.random() * weightedTypes.length)]; }
 function ownerColor(player) { return PLAYER_COLORS[player] || null; }
+
+function aiColorChip(player) {
+  const color = ownerColor(player) || '#94a3b8';
+  return `<span class="ai-color-dot" style="background:${color};"></span>`;
+}
+
+function compactEco(player) {
+  const eco = computeEconomy(player);
+  const a = eco.available || {};
+  return `🪵${a.wood || 0} 🐑${a.livestock || 0} 🌾${a.crops || 0} 🥫${a.provisions || 0}`;
+}
+
+function renderAiTurnIndicator(activePlayer = null, queued = []) {
+  if (!aiTurnIndicatorEl) return;
+  if (gameMode !== 'easy-ai') {
+    aiTurnIndicatorEl.classList.add('hidden');
+    aiTurnIndicatorEl.innerHTML = '';
+    return;
+  }
+
+  const players = [...aiPlayers];
+  const queueSet = new Set(queued || []);
+  const rows = players.map((player) => {
+    const cls = player === activePlayer ? 'ai-turn-row active' : 'ai-turn-row';
+    const marker = player === activePlayer ? '▶' : (queueSet.has(player) ? '…' : '✓');
+    return `<div class="${cls}"><span class="ai-turn-left">${aiColorChip(player)}<strong>${player.toUpperCase()}</strong> ${marker}</span><span class="ai-turn-econ">${compactEco(player)}</span></div>`;
+  }).join('');
+
+  const title = activePlayer
+    ? `${aiColorChip(activePlayer)} ${activePlayer.toUpperCase()} is acting`
+    : `${aiColorChip('red')} AI opponents are preparing turns`;
+
+  aiTurnIndicatorEl.innerHTML = `
+    <div class="ai-turn-title"><span class="ai-spinner"></span><span>${title}</span></div>
+    <div class="ai-turn-list">${rows}</div>
+  `;
+  aiTurnIndicatorEl.classList.remove('hidden');
+}
 
 function blendHex(colorA, colorB, weightA = 0.5) {
   if (!colorA || !colorB) return colorA || colorB || '#888';
@@ -734,6 +773,7 @@ function startGame(mode) {
     setupDuoGame();
   }
   render();
+  renderAiTurnIndicator(null, []);
   startInProgress = false;
   });
 }
@@ -847,10 +887,12 @@ function runEasyAiTurn() {
   const planner = window.UpKeepEasyAI;
   if (!planner || (!planner.chooseCandidates && !planner.chooseAction)) {
     lastDebug = 'Easy AI unavailable: planner file missing.';
+    suppressAutoRender = false;
     return;
   }
 
   let acted = false;
+  suppressAutoRender = true;
   for (let i = 0; i < 18; i += 1) {
     const state = buildEasyAiState();
     let candidates = [];
@@ -896,6 +938,7 @@ function runEasyAiTurn() {
     if (!executed) break;
   }
 
+  suppressAutoRender = false;
   if (!acted) lastDebug = 'Easy AI: no action available; passing turn.';
 
   const logs = turnOrder.flatMap((player) => enforceShortages(player));
@@ -924,6 +967,7 @@ let panStartScrollLeft = 0;
 let panStartScrollTop = 0;
 let animationFrameHandle = null;
 const activeAnimations = [];
+let suppressAutoRender = false;
 let showActionHelp = false;
 
 let onlineRole = null; // 'host' | 'guest'
@@ -1531,6 +1575,53 @@ function isCavalry(unitType) {
   return ['horseman', 'lancer', 'cavalry_archer', 'royal_knight'].includes(unitType);
 }
 
+function isInfantryOrWorkerRoaded(unitType) {
+  const cls = UNIT_DEFS[unitType]?.cls;
+  return (cls === 'infantry' || cls === 'worker') && unitType !== 'axman';
+}
+
+function tileIsOwnedOpenFor(player, key) {
+  const tile = getTile(key);
+  if (!tile || tile.owner !== player) return false;
+  return !isTileClosedFor(player, key);
+}
+
+function getRoadedInfantryWorkerDestinations(fromKey, unit) {
+  if (!isInfantryOrWorkerRoaded(unit.type)) return new Set();
+  if (unit.movesLeft <= 0) return new Set();
+
+  const out = new Set();
+  const queue = [{ key: fromKey, steps: 0 }];
+  const seen = new Map([[fromKey, 0]]);
+
+  while (queue.length) {
+    const current = queue.shift();
+    if (!current) break;
+    for (const nextKey of adjacentKeys(current.key)) {
+      const step = current.steps + 1;
+      if (step > 2) continue;
+
+      const occ = unitAtKey(nextKey);
+      const friendlyOcc = occ && occ.player === unit.player;
+      const hostileOcc = occ && occ.player !== unit.player;
+
+      const traversableOwnedOpen = tileIsOwnedOpenFor(unit.player, nextKey) && !friendlyOcc && !hostileOcc;
+      if (!traversableOwnedOpen) continue;
+
+      if (step === 2) out.add(nextKey);
+
+      const best = seen.get(nextKey);
+      if (best === undefined || step < best) {
+        seen.set(nextKey, step);
+        queue.push({ key: nextKey, steps: step });
+      }
+    }
+  }
+
+  out.delete(fromKey);
+  return out;
+}
+
 function getCavalryDestinations(fromKey, unit) {
   const maxSteps = Math.max(1, unit.movesLeft);
   const startPlayer = unit.player;
@@ -1693,7 +1784,10 @@ function explainMoveFailure(fromKey, toKey) {
   } else {
     const from = getCellByKey(fromKey);
     const to = getCellByKey(toKey);
-    if (!isAdjacent(from, to)) return 'Move invalid: destination is not adjacent.';
+    const boostedTargets = getRoadedInfantryWorkerDestinations(fromKey, unit);
+    const adjacent = isAdjacent(from, to);
+    const boosted = boostedTargets.has(toKey);
+    if (!adjacent && !boosted) return 'Move invalid: destination is not adjacent or eligible roaded open-owned bonus movement.';
   }
 
   const destUnit = units.get(toKey);
@@ -1727,7 +1821,8 @@ function canMove(fromKey, toKey) {
   } else {
     const from = getCellByKey(fromKey);
     const to = getCellByKey(toKey);
-    if (!isAdjacent(from, to)) return false;
+    const boostedTargets = getRoadedInfantryWorkerDestinations(fromKey, unit);
+    if (!isAdjacent(from, to) && !boostedTargets.has(toKey)) return false;
   }
 
   if (destinationUnit && destinationUnit.player !== unit.player) {
@@ -1812,7 +1907,9 @@ function getMoveTargets(fromKey) {
   if (!unit) return [];
   if (unit.type === 'lancer') return [...getLancerRouteMap(fromKey, unit).keys()];
   if (isCavalry(unit.type)) return [...getCavalryDestinations(fromKey, unit)];
-  return tiles.map(keyOf).filter((toKey) => canMove(fromKey, toKey));
+  const base = tiles.map(keyOf).filter((toKey) => canMove(fromKey, toKey));
+  const boosted = [...getRoadedInfantryWorkerDestinations(fromKey, unit)].filter((toKey) => canMove(fromKey, toKey));
+  return [...new Set([...base, ...boosted])];
 }
 
 function getTargets(fromKey) {
@@ -1906,7 +2003,7 @@ function upgradeTileAt(key, toType) {
   tile.type = toType;
   tile.symbols = buildSymbols(toType);
   lastDebug = `Upgrade ok: ${key} -> ${toType}.`;
-  render();
+  if (!suppressAutoRender) render();
   return true;
 }
 
@@ -1939,7 +2036,7 @@ function trainUnitAt(key, unitType) {
 
   units.set(key, { player: currentPlayer, type: unitType, movesLeft: 0, actionsLeft: 0 });
   lastDebug = `Training ok: ${unitType} at ${key}.`;
-  render();
+  if (!suppressAutoRender) render();
   return true;
 }
 
@@ -1956,7 +2053,7 @@ function upgradeUnitAt(key, newType) {
   unit.type = newType;
   unit.actionsLeft -= 1;
   lastDebug = `Unit upgrade ok: ${key} -> ${newType}.`;
-  render();
+  if (!suppressAutoRender) render();
 }
 
 function renderResources() {
@@ -2306,6 +2403,28 @@ function renderCavalryArcherGlyph(pos) {
   return g;
 }
 
+
+function renderConstableGlyph(pos) {
+  const g = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+
+  const diamond = document.createElementNS('http://www.w3.org/2000/svg', 'polygon');
+  diamond.setAttribute('points', `${pos.x},${pos.y - 12} ${pos.x + 10},${pos.y} ${pos.x},${pos.y + 12} ${pos.x - 10},${pos.y}`);
+  diamond.setAttribute('fill', '#f59e0b');
+  diamond.setAttribute('opacity', '0.9');
+  diamond.setAttribute('stroke', '#111827');
+  diamond.setAttribute('stroke-width', '1.2');
+  g.appendChild(diamond);
+
+  const spade = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+  spade.setAttribute('x', String(pos.x));
+  spade.setAttribute('y', String(pos.y + 2));
+  spade.setAttribute('text-anchor', 'middle');
+  spade.setAttribute('class', 'unit-icon');
+  spade.textContent = '♠️';
+  g.appendChild(spade);
+  return g;
+}
+
 function renderRoyalKnightGlyph(pos) {
   const g = document.createElementNS('http://www.w3.org/2000/svg', 'g');
   const horse = document.createElementNS('http://www.w3.org/2000/svg', 'text');
@@ -2356,6 +2475,10 @@ function renderUnitGlyph(unit, pos, group) {
   }
   if (unit.type === 'rangehand') {
     group.appendChild(renderSlingGlyph(pos));
+    return;
+  }
+  if (unit.type === 'constable') {
+    group.appendChild(renderConstableGlyph(pos));
     return;
   }
   const emoji = UNIT_DEFS[unit.type]?.emoji || '❓';
@@ -2874,6 +2997,7 @@ endTurnBtn.addEventListener('click', () => {
     render(logs);
 
     const aiQueue = [...aiPlayers];
+    renderAiTurnIndicator(null, aiQueue);
     const runNextAi = () => {
       const next = aiQueue.shift();
       if (!next) {
@@ -2881,16 +3005,18 @@ endTurnBtn.addEventListener('click', () => {
         resetTurnActions('blue');
         revealExpandingTiles();
         render(turnOrder.flatMap((player) => enforceShortages(player)));
+        renderAiTurnIndicator(null, []);
         return;
       }
       currentPlayer = next;
       resetTurnActions(next);
+      renderAiTurnIndicator(next, aiQueue);
       try {
         runEasyAiTurn();
       } catch (error) {
         lastDebug = `AI turn error (${next}): ${error?.message || error}`;
       }
-      window.setTimeout(runNextAi, 120);
+      window.setTimeout(runNextAi, 140);
     };
 
     window.setTimeout(runNextAi, 180);
@@ -2908,6 +3034,7 @@ endTurnBtn.addEventListener('click', () => {
   selectedKey = null;
   lastDebug = 'Turn advanced. Economy table reflects continuous produced/used/available flow';
   render(logs);
+  renderAiTurnIndicator(null, []);
   syncOnlineStateIfHost();
 });
 
