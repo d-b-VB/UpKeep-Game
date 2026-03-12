@@ -1577,6 +1577,7 @@ function isCavalry(unitType) {
 
 function isInfantryOrWorkerRoaded(unitType) {
   const cls = UNIT_DEFS[unitType]?.cls;
+  if (unitType === 'surveyor') return true;
   return (cls === 'infantry' || cls === 'worker') && unitType !== 'axman';
 }
 
@@ -1593,6 +1594,8 @@ function getRoadedInfantryWorkerDestinations(fromKey, unit) {
   const out = new Set();
   const queue = [{ key: fromKey, steps: 0 }];
   const seen = new Map([[fromKey, 0]]);
+  const cls = UNIT_DEFS[unit.type]?.cls;
+  const isWorkerLine = cls === 'worker' || unit.type === 'surveyor';
 
   while (queue.length) {
     const current = queue.shift();
@@ -1604,11 +1607,27 @@ function getRoadedInfantryWorkerDestinations(fromKey, unit) {
       const occ = unitAtKey(nextKey);
       const friendlyOcc = occ && occ.player === unit.player;
       const hostileOcc = occ && occ.player !== unit.player;
+      if (hostileOcc) continue;
 
-      const traversableOwnedOpen = tileIsOwnedOpenFor(unit.player, nextKey) && !friendlyOcc && !hostileOcc;
-      if (!traversableOwnedOpen) continue;
+      const tile = getTile(nextKey);
+      if (!tile) continue;
+      const isOwned = tile.owner === unit.player;
+      const isOpen = !isTileClosedFor(unit.player, nextKey);
 
-      if (step === 2) out.add(nextKey);
+      // Step 1 must be both open + owned.
+      if (step === 1) {
+        if (!(isOwned && isOpen)) continue;
+      }
+
+      // Step 2 may be open OR owned, with worker/infantry distinction for enemy land.
+      if (step === 2) {
+        if (!(isOpen || isOwned)) continue;
+        if (friendlyOcc) continue; // can pass through friendlies, but cannot end on them.
+        const enemyOwned = Boolean(tile.owner) && tile.owner !== unit.player;
+        if (isWorkerLine && enemyOwned) continue;
+        if (!isWorkerLine && enemyOwned && !isOpen) continue;
+        out.add(nextKey);
+      }
 
       const best = seen.get(nextKey);
       if (best === undefined || step < best) {
