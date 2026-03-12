@@ -59,6 +59,63 @@
     return target;
   }
 
+  function buildAggressiveProgressionGoal(state) {
+    const me = state.currentPlayer || 'red';
+    const avail = state.eco?.available || {};
+    const tiles = state.tiles || [];
+    const owned = tiles.filter((t) => t.owner === me);
+    const countByType = {};
+    for (const t of owned) countByType[t.type] = (countByType[t.type] || 0) + 1;
+
+    const wood = Number(avail.wood || 0);
+    const livestock = Number(avail.livestock || 0);
+    const crops = Number(avail.crops || 0);
+    const provisions = Number(avail.provisions || 0);
+
+    const resourceGoals = [];
+    const tileGoals = new Set();
+
+    if (wood >= 2 && livestock < 2) {
+      resourceGoals.push('livestock');
+      tileGoals.add('pasture');
+    }
+    if (wood >= 2 && livestock >= 2 && crops < 2) {
+      resourceGoals.push('crops');
+      tileGoals.add('farm');
+    }
+    if (wood >= 2 && livestock >= 2 && crops >= 2 && provisions < 2) {
+      resourceGoals.push('provisions');
+      tileGoals.add('homestead');
+    }
+
+    if (wood >= 2 && provisions < 2) tileGoals.add('homestead');
+
+    const homestead = Number(countByType.homestead || 0);
+    const village = Number(countByType.village || 0);
+    const town = Number(countByType.town || 0);
+    const city = Number(countByType.city || 0);
+    const manor = Number(countByType.manor || 0);
+    const estate = Number(countByType.estate || 0);
+    const palace = Number(countByType.palace || 0);
+
+    if (homestead >= 2 && village < 2) tileGoals.add('village');
+    if (village >= 2 && town < 2 && manor < 2) {
+      tileGoals.add('town');
+      tileGoals.add('manor');
+    }
+    if (town >= 2 && city < 2 && estate < 2) {
+      tileGoals.add('city');
+      tileGoals.add('estate');
+    }
+    if (city >= 2) {
+      if (manor < 2) tileGoals.add('manor');
+      if (estate < 2) tileGoals.add('estate');
+      if (palace < 2) tileGoals.add('palace');
+    }
+
+    return { resourceGoals, tileGoals };
+  }
+
   function buildResourceBalancePlan(state) {
     const order = state.resourceOrder || [];
     const avail = state.eco?.available || {};
@@ -138,7 +195,7 @@
     };
   }
 
-  function chooseUpgradeCandidates(state, targetResource, balancePlan, context) {
+  function chooseUpgradeCandidates(state, targetResource, balancePlan, context, progressionGoal) {
     const upgrades = state.legalTileUpgrades || [];
     const toPriority = { city: 10, town: 8, village: 6, palace: 5, estate: 4, manor: 3, keep: 4, stronghold: 3, outpost: 2 };
     const avail = state.eco?.available || {};
@@ -175,11 +232,13 @@
         const fromRes = prodBy[u.fromType];
         let score = (toPriority[u.toType] || 0)
           + (produced === targetResource ? 12 : 0)
+          + (progressionGoal?.resourceGoals?.includes(produced) ? 34 : 0)
           + (u.toType === 'village' ? 12 : 0)
           + (u.toType === 'town' ? 14 : 0)
           + (u.toType === 'city' ? 16 : 0);
 
         if (isWorkerClass(unitClass(state, u.unitType))) score += 8;
+        if (progressionGoal?.tileGoals?.has(u.toType)) score += 46;
         if (context?.needExpansionPush && ['village', 'town', 'city', 'manor', 'estate', 'palace'].includes(u.toType)) score += 6;
 
         if (fromRes && Number(avail[fromRes] || 0) <= 2) score -= 20;
@@ -287,7 +346,7 @@
     }).sort((a, b) => b.score - a.score);
   }
 
-  function scoreMove(unit, fromKey, toKey, state, targetResource, tileMap, unitMap, balancePlan) {
+  function scoreMove(unit, fromKey, toKey, state, targetResource, tileMap, unitMap, balancePlan, progressionGoal) {
     const toTile = tileMap.get(toKey);
     const fromCell = keyToCell(fromKey);
     const toCell = keyToCell(toKey);
@@ -311,6 +370,7 @@
 
     const isCapturing = toTile && toTile.owner !== unit.player;
     if (prod === targetResource) score += 12;
+    if (progressionGoal?.resourceGoals?.includes(prod)) score += 26;
     if (prod && balancePlan?.mildCaptureTargets?.has(prod)) score += 9;
     if (prod && balancePlan?.avoidCaptureFrom?.has(prod)) score -= 14;
 
@@ -338,7 +398,7 @@
     return score;
   }
 
-  function chooseMoveCandidates(state, targetResource, balancePlan) {
+  function chooseMoveCandidates(state, targetResource, balancePlan, progressionGoal) {
     const tileMap = tileByKey(state.tiles || []);
     const unitMap = unitByKey(state.units || []);
     const out = [];
@@ -347,7 +407,7 @@
       if (unit.player !== state.currentPlayer) continue;
       const moves = state.legalMovesByUnit?.[unit.key] || [];
       for (const toKey of moves) {
-        const score = scoreMove(unit, unit.key, toKey, state, targetResource, tileMap, unitMap, balancePlan);
+        const score = scoreMove(unit, unit.key, toKey, state, targetResource, tileMap, unitMap, balancePlan, progressionGoal);
         out.push({ type: 'move', from: unit.key, to: toKey, score });
       }
     }
@@ -485,6 +545,7 @@
           projectedAvail[prod] = Number(projectedAvail[prod] || 0) + 1;
           score += 10;
           if (prod === targetResource) score += 12;
+    if (progressionGoal?.resourceGoals?.includes(prod)) score += 26;
         }
       }
       return score;
@@ -582,11 +643,12 @@
     if (!state || !state.currentPlayer) return [];
     const targetResource = pickTargetResource(state);
     const balancePlan = buildResourceBalancePlan(state);
+    const progressionGoal = buildAggressiveProgressionGoal(state);
     const context = strategicContext(state);
 
     let trains = chooseTrainCandidates(state, targetResource, context);
-    let moves = chooseMoveCandidates(state, targetResource, balancePlan);
-    let upgrades = chooseUpgradeCandidates(state, targetResource, balancePlan, context);
+    let moves = chooseMoveCandidates(state, targetResource, balancePlan, progressionGoal);
+    let upgrades = chooseUpgradeCandidates(state, targetResource, balancePlan, context, progressionGoal);
     let shots = chooseShotCandidates(state);
 
     const workerEval = buildWorkerOptionBoosts(state, targetResource);
@@ -605,6 +667,7 @@
     for (const a of all) {
       if (a.type === 'move' && (context.captureMovesByResource?.[targetResource] || 0) > 0) a.score += 2;
       if (a.type === 'upgrade-tile' && (context.settlementUpgrades || 0) > 0) a.score += 2;
+      if (a.type === 'upgrade-tile' && progressionGoal?.tileGoals?.has(a.toType)) a.score += 24;
     }
 
     return all.sort((a, b) => (b.score || 0) - (a.score || 0));

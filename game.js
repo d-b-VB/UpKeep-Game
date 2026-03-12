@@ -882,7 +882,7 @@ function aiActionWouldCauseShortage(action, player = 'red') {
   return afterScore > beforeScore;
 }
 
-function runEasyAiTurn() {
+function runEasyAiTurn(finalizeTurn = true) {
   if (gameMode !== 'easy-ai' || currentPlayer === 'blue') return;
   const planner = window.UpKeepEasyAI;
   if (!planner || (!planner.chooseCandidates && !planner.chooseAction)) {
@@ -941,12 +941,14 @@ function runEasyAiTurn() {
   suppressAutoRender = false;
   if (!acted) lastDebug = 'Easy AI: no action available; passing turn.';
 
-  const logs = turnOrder.flatMap((player) => enforceShortages(player));
-  currentPlayer = 'blue';
-  resetTurnActions('blue');
-  selectedKey = null;
-  revealExpandingTiles();
-  render(logs);
+  if (finalizeTurn) {
+    const logs = turnOrder.flatMap((player) => enforceShortages(player));
+    currentPlayer = 'blue';
+    resetTurnActions('blue');
+    selectedKey = null;
+    revealExpandingTiles();
+    render(logs);
+  }
 }
 
 let currentPlayer = 'blue';
@@ -3022,6 +3024,7 @@ endTurnBtn.addEventListener('click', () => {
       if (!next) {
         currentPlayer = 'blue';
         resetTurnActions('blue');
+        selectedKey = null;
         revealExpandingTiles();
         render(turnOrder.flatMap((player) => enforceShortages(player)));
         renderAiTurnIndicator(null, []);
@@ -3031,7 +3034,7 @@ endTurnBtn.addEventListener('click', () => {
       resetTurnActions(next);
       renderAiTurnIndicator(next, aiQueue);
       try {
-        runEasyAiTurn();
+        runEasyAiTurn(false);
       } catch (error) {
         lastDebug = `AI turn error (${next}): ${error?.message || error}`;
       }
