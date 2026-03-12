@@ -1577,6 +1577,7 @@ function isCavalry(unitType) {
 
 function isInfantryOrWorkerRoaded(unitType) {
   const cls = UNIT_DEFS[unitType]?.cls;
+  if (unitType === 'surveyor') return true;
   return (cls === 'infantry' || cls === 'worker') && unitType !== 'axman';
 }
 
@@ -1594,7 +1595,7 @@ function getRoadedInfantryWorkerDestinations(fromKey, unit) {
   const queue = [{ key: fromKey, steps: 0 }];
   const seen = new Map([[fromKey, 0]]);
   const cls = UNIT_DEFS[unit.type]?.cls;
-  const isWorkerLine = cls === 'worker';
+  const isWorkerLine = cls === 'worker' || unit.type === 'surveyor';
 
   while (queue.length) {
     const current = queue.shift();
