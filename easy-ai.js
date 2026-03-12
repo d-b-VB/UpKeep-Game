@@ -437,6 +437,7 @@
 
   function buildWorkerOptionBoosts(state, targetResource) {
     const me = state.currentPlayer || 'red';
+    const progressionGoal = buildAggressiveProgressionGoal(state);
     const boosts = new Map();
     const reasons = new Map();
     const tiles = state.tiles || [];
