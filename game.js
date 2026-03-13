@@ -500,47 +500,49 @@ function getCoreMosaicTemplate(tileType, miniRadius) {
   const key = `${tileType}|${miniRadius}`;
   if (coreMosaicTemplateCache.has(key)) return coreMosaicTemplateCache.get(key);
 
-  const polyPts = [];
-  const accentCenters = [];
+  const minis = [];
+  const accentMinis = [];
   const stepRange = Math.ceil((HEX_RADIUS * 2.2) / miniRadius);
 
-  for (let mq = -stepRange; mq <= stepRange; mq += 1) {
-    for (let mr = -stepRange; mr <= stepRange; mr += 1) {
-      const pos = axialToPixel({ q: mq, r: mr }, miniRadius);
-      const verts = polygonVertices(pos, miniRadius);
+  for (let dmq = -stepRange; dmq <= stepRange; dmq += 1) {
+    for (let dmr = -stepRange; dmr <= stepRange; dmr += 1) {
+      const localPos = axialToPixelLocal({ q: dmq, r: dmr }, miniRadius);
+      const verts = polygonVertices(localPos, miniRadius);
       if (!verts.every(([x, y]) => pointInPolygon(x, y, polygonVertices({ x: 0, y: 0 }, HEX_RADIUS)))) continue;
 
-      const idx = ((mq - mr) % 3 + 3) % 3;
-      polyPts.push({ points: polygonPoints(pos, miniRadius), fill: colorForTileShard({ type: tileType }, idx), idx });
-      if (idx === 2) accentCenters.push(pos);
+      const idx = ((dmq - dmr) % 3 + 3) % 3;
+      minis.push({ localPos, idx, fill: colorForTileShard({ type: tileType }, idx) });
+      if (idx === 2) accentMinis.push({ localPos });
     }
   }
 
-  const out = { polyPts, accentCenters };
+  const out = { minis, accentMinis };
   coreMosaicTemplateCache.set(key, out);
   return out;
 }
 
-function renderCoreMosaicForTile(mosaicGroup, tile, pos, miniRadius) {
+function renderCoreMosaicForTile(mosaicGroup, tile, miniRadius) {
   const template = getCoreMosaicTemplate(tile.type, miniRadius);
-  for (const p of template.polyPts) {
+  const tilePos = axialToPixel(tile);
+
+  for (const m of template.minis) {
+    const pos = { x: tilePos.x + m.localPos.x, y: tilePos.y + m.localPos.y };
     const poly = document.createElementNS('http://www.w3.org/2000/svg', 'polygon');
-    poly.setAttribute('points', p.points);
-    poly.setAttribute('fill', p.fill);
+    poly.setAttribute('points', polygonPoints(pos, miniRadius));
+    poly.setAttribute('fill', m.fill);
     poly.setAttribute('stroke', 'none');
-    poly.setAttribute('transform', `translate(${pos.x},${pos.y})`);
     mosaicGroup.appendChild(poly);
   }
 
   if (tile.owner) {
     const accentFill = accentColorForTileShard(tile, 2) || '#ffffff';
-    for (const c of template.accentCenters) {
+    for (const m of template.accentMinis) {
+      const pos = { x: tilePos.x + m.localPos.x, y: tilePos.y + m.localPos.y };
       const accent = document.createElementNS('http://www.w3.org/2000/svg', 'polygon');
-      accent.setAttribute('points', polygonPoints(c, miniRadius * 0.5));
+      accent.setAttribute('points', polygonPoints(pos, miniRadius * 0.5));
       accent.setAttribute('fill', accentFill);
       accent.setAttribute('stroke', 'none');
       accent.setAttribute('opacity', '0.95');
-      accent.setAttribute('transform', `translate(${pos.x},${pos.y})`);
       mosaicGroup.appendChild(accent);
     }
   }
@@ -641,6 +643,13 @@ function axialToPixel({ q, r }, radius = HEX_RADIUS) {
   return {
     x: ORIGIN.x + radius * Math.sqrt(3) * (q + r / 2),
     y: ORIGIN.y + radius * 1.5 * r,
+  };
+}
+
+function axialToPixelLocal({ q, r }, radius = HEX_RADIUS) {
+  return {
+    x: radius * Math.sqrt(3) * (q + r / 2),
+    y: radius * 1.5 * r,
   };
 }
 
@@ -2680,7 +2689,7 @@ function render(logs = []) {
     }
 
     for (const tc of tileCenters) {
-      renderCoreMosaicForTile(mosaicGroup, tc.tile, tc.pos, miniRadius);
+      renderCoreMosaicForTile(mosaicGroup, tc.tile, miniRadius);
     }
 
     for (const mini of globalMini) {
