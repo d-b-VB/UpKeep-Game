@@ -68,6 +68,13 @@
           <label for="primitivity-index">Primitivity Index: <span id="primitivity-index-value">85%</span></label>
           <input id="primitivity-index" type="range" min="15" max="100" step="1" value="85" />
         </div>
+        <div class="map-settings">
+          <label for="map-size">Map size radius: <span id="map-size-value">6</span></label>
+          <input id="map-size" type="range" min="4" max="12" step="1" value="6" />
+          <label class="inline-toggle"><input id="map-unlimited" type="checkbox" /> Unlimited map expansion</label>
+          <label for="enemy-distance">Enemy distance: <span id="enemy-distance-value">12</span></label>
+          <input id="enemy-distance" type="range" min="6" max="24" step="1" value="12" />
+        </div>
         <details class="online-connect" id="online-connect">
           <summary>Online 2-player handshake (host/join)</summary>
           <p class="online-help">Use copy/paste signaling: Host (Player 1 / blue) creates offer, Joiner (Player 2 / red) pastes offer to create answer, Host pastes answer to connect.</p>

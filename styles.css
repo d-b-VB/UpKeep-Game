@@ -472,3 +472,22 @@ button:disabled { opacity: 0.45; cursor: not-allowed; }
   opacity: 0.9;
   font-variant-numeric: tabular-nums;
 }
+
+
+.map-settings {
+  margin-top: 10px;
+  border-top: 1px solid rgba(255,255,255,0.16);
+  padding-top: 8px;
+  display: grid;
+  gap: 6px;
+  font-size: 0.84rem;
+  color: #dbe4ff;
+}
+.map-settings input[type="range"] {
+  width: 100%;
+}
+.inline-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}

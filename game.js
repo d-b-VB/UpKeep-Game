@@ -24,14 +24,21 @@ const onlineRemoteSignalEl = document.getElementById('online-remote-signal');
 const onlineStatusEl = document.getElementById('online-status');
 const primitivityIndexEl = document.getElementById('primitivity-index');
 const primitivityIndexValueEl = document.getElementById('primitivity-index-value');
+const mapSizeEl = document.getElementById('map-size');
+const mapSizeValueEl = document.getElementById('map-size-value');
+const mapUnlimitedEl = document.getElementById('map-unlimited');
+const enemyDistanceEl = document.getElementById('enemy-distance');
+const enemyDistanceValueEl = document.getElementById('enemy-distance-value');
 
 const HEX_RADIUS = 42;
 const MINI_RADIUS = 8;
 const ORIGIN = { x: 980, y: 860 };
 const DIRECTIONS = [[1, 0], [1, -1], [0, -1], [-1, 0], [-1, 1], [0, 1]];
-const MAP_RADIUS = 6; // 127 tiles
-const SOLO_START_RADIUS = 2; // 19 tiles
-const ULTRA_MOSAIC = { name: 'Ultra', miniRadius: 5.2 };
+let mapRadius = 6; // finite radius for bounded modes
+let soloStartRadius = 2; // starting revealed radius
+let enemySpawnDistance = 12;
+let mapUnlimited = false;
+const ULTRA_MOSAIC = { name: 'Ultra', miniRadius: 7 };
 const PLAYER_COLORS = {
   blue: '#3b82f6',
   red: '#ef4444',
@@ -111,6 +118,17 @@ function applyPrimitivityIndex(value) {
 }
 
 applyPrimitivityIndex(primitivityIndex);
+
+function applyMapSettings() {
+  mapRadius = Math.max(4, Math.min(24, Number(mapSizeEl?.value || mapRadius || 6)));
+  mapUnlimited = Boolean(mapUnlimitedEl?.checked);
+  enemySpawnDistance = Math.max(6, Math.min(40, Number(enemyDistanceEl?.value || enemySpawnDistance || (mapRadius * 2))));
+  soloStartRadius = Math.max(2, Math.min(5, Math.floor(mapRadius / 3)));
+  if (mapSizeValueEl) mapSizeValueEl.textContent = String(mapRadius);
+  if (enemyDistanceValueEl) enemyDistanceValueEl.textContent = String(enemySpawnDistance);
+}
+
+applyMapSettings();
 
 const tilePalettes = {
   forest: ['#1b5e20', '#2e7d32', '#6d4c41'],
@@ -379,6 +397,11 @@ function keyOf(cell) { return `${cell.q},${cell.r}`; }
 function randomType() { return weightedTypes[Math.floor(Math.random() * weightedTypes.length)]; }
 function ownerColor(player) { return PLAYER_COLORS[player] || null; }
 
+function displayUnitName(unitType) {
+  const map = { rangehand: "range hand" };
+  return map[unitType] || unitType.replaceAll("_", " " );
+}
+
 function aiColorChip(player) {
   const color = ownerColor(player) || '#94a3b8';
   return `<span class="ai-color-dot" style="background:${color};"></span>`;
@@ -473,36 +496,101 @@ function accentColorForTileShard(tile, shardIdx = 1) {
   return blendHex(ownerColor(tile.owner), baseColor, 0.5);
 }
 
-function productionQtyForTile(player, tile, tileSnapshot = tiles, unitSnapshot = units) {
-  const prodKey = productionByType[tile.type];
-  if (!prodKey || tile.owner !== player) return 0;
+function getCoreMosaicTemplate(tileType, miniRadius) {
+  const key = `${tileType}|${miniRadius}`;
+  if (coreMosaicTemplateCache.has(key)) return coreMosaicTemplateCache.get(key);
 
-  const tileMap = new Map(tileSnapshot.map((t) => [keyOf(t), t]));
-  const settlementTypes = new Set(Object.keys(structureUpkeep));
-  const palaceCount = tileSnapshot.filter((t) => t.owner === player && t.type === 'palace').length;
-  const adjacentOwned = adjacentKeys(keyOf(tile)).map((k) => tileMap.get(k)).filter((t) => t && t.owner === player);
+  const polyPts = [];
+  const accentCenters = [];
+  const stepRange = Math.ceil((HEX_RADIUS * 2.2) / miniRadius);
 
-  let additive = 0;
-  const occ = unitSnapshot.get(keyOf(tile));
-  if (occ?.player === player && ['laborer', 'rangehand'].includes(occ.type)) additive += 1;
-  additive += adjacentOwned.filter((t) => t.type === 'estate').length;
+  for (let mq = -stepRange; mq <= stepRange; mq += 1) {
+    for (let mr = -stepRange; mr <= stepRange; mr += 1) {
+      const pos = axialToPixel({ q: mq, r: mr }, miniRadius);
+      const verts = polygonVertices(pos, miniRadius);
+      if (!verts.every(([x, y]) => pointInPolygon(x, y, polygonVertices({ x: 0, y: 0 }, HEX_RADIUS)))) continue;
 
-  for (const t of adjacentOwned) {
-    const u = unitSnapshot.get(keyOf(t));
-    if (u?.player === player && u.type === 'constable') {
-      const here = unitSnapshot.get(keyOf(tile));
-      if (here?.player === player) additive += 1;
+      const idx = ((mq - mr) % 3 + 3) % 3;
+      polyPts.push({ points: polygonPoints(pos, miniRadius), fill: colorForTileShard({ type: tileType }, idx), idx });
+      if (idx === 2) accentCenters.push(pos);
     }
   }
 
-  let qty = 1 + additive;
-  if (settlementTypes.has(tile.type)) {
-    const manorAdj = adjacentOwned.filter((t) => t.type === 'manor').length;
-    if (manorAdj > 0) qty *= (2 ** manorAdj);
-    if (palaceCount > 0) qty *= (1 + palaceCount);
+  const out = { polyPts, accentCenters };
+  coreMosaicTemplateCache.set(key, out);
+  return out;
+}
+
+function renderCoreMosaicForTile(mosaicGroup, tile, pos, miniRadius) {
+  const template = getCoreMosaicTemplate(tile.type, miniRadius);
+  for (const p of template.polyPts) {
+    const poly = document.createElementNS('http://www.w3.org/2000/svg', 'polygon');
+    poly.setAttribute('points', p.points);
+    poly.setAttribute('fill', p.fill);
+    poly.setAttribute('stroke', 'none');
+    poly.setAttribute('transform', `translate(${pos.x},${pos.y})`);
+    mosaicGroup.appendChild(poly);
   }
 
-  return qty;
+  if (tile.owner) {
+    const accentFill = accentColorForTileShard(tile, 2) || '#ffffff';
+    for (const c of template.accentCenters) {
+      const accent = document.createElementNS('http://www.w3.org/2000/svg', 'polygon');
+      accent.setAttribute('points', polygonPoints(c, miniRadius * 0.5));
+      accent.setAttribute('fill', accentFill);
+      accent.setAttribute('stroke', 'none');
+      accent.setAttribute('opacity', '0.95');
+      accent.setAttribute('transform', `translate(${pos.x},${pos.y})`);
+      mosaicGroup.appendChild(accent);
+    }
+  }
+}
+
+function buildProductionContext(tileSnapshot = tiles) {
+  const tileMap = new Map(tileSnapshot.map((t) => [keyOf(t), t]));
+  const palaceCountByPlayer = new Map();
+  for (const t of tileSnapshot) {
+    if (t.type !== 'palace' || !t.owner) continue;
+    palaceCountByPlayer.set(t.owner, (palaceCountByPlayer.get(t.owner) || 0) + 1);
+  }
+  return { tileMap, palaceCountByPlayer };
+}
+
+function productionQtyForTile(player, tile, tileSnapshot = tiles, unitSnapshot = units, prodCtx = null) {
+  const prodKey = productionByType[tile.type];
+  if (!prodKey || tile.owner !== player) return 0;
+
+  const ctx = prodCtx || buildProductionContext(tileSnapshot);
+  const settlementTypes = new Set(Object.keys(structureUpkeep));
+  const palaceCount = ctx.palaceCountByPlayer.get(player) || 0;
+  const adjacentOwned = adjacentKeys(keyOf(tile)).map((k) => ctx.tileMap.get(k)).filter((t) => t && t.owner === player);
+
+  const occ = unitSnapshot.get(keyOf(tile));
+  const laborerBoost = (occ?.player === player && ['laborer', 'rangehand'].includes(occ.type)) ? 1 : 0;
+
+  let estateAdj = 0;
+  let manorAdj = 0;
+  let constableAdj = 0;
+  for (const t of adjacentOwned) {
+    if (t.type === 'estate') estateAdj += 1;
+    if (t.type === 'manor') manorAdj += 1;
+    const u = unitSnapshot.get(keyOf(t));
+    if (u?.player === player && u.type === 'constable' && occ?.player === player) constableAdj += 1;
+  }
+
+  const laborerMult = 1 + laborerBoost;
+  const estateMult = 1 + estateAdj;
+  const constableMult = 1 + constableAdj;
+  const palaceMult = 1 + palaceCount;
+  const manorMult = 1 + manorAdj;
+
+  let qty = laborerMult * estateMult * constableMult;
+  if (settlementTypes.has(tile.type)) {
+    qty *= manorMult;
+    qty *= palaceMult;
+  }
+
+  return Math.max(1, qty);
 }
 function pick(arr) { return arr[Math.floor(Math.random() * arr.length)]; }
 
@@ -612,12 +700,12 @@ function addCellTile(cell) {
 }
 
 function withinFiniteMap(cell) {
-  return cubeDistance({ q: 0, r: 0 }, cell) <= MAP_RADIUS;
+  return cubeDistance({ q: 0, r: 0 }, cell) <= mapRadius;
 }
 
 function ensureTile(q, r) {
   const cell = { q, r };
-  if ((gameMode === 'duo' || gameMode === 'online') && !withinFiniteMap(cell)) return null;
+  if ((gameMode === 'duo' || gameMode === 'online') && !mapUnlimited && !withinFiniteMap(cell)) return null;
   addCellTile(cell);
   return getTile(`${q},${r}`);
 }
@@ -677,18 +765,18 @@ function computeEvenAiStarts(center, ringDistance, count) {
 }
 
 function setupDuoGame() {
-  cells = buildRadiusCells(MAP_RADIUS);
+  cells = buildRadiusCells(mapRadius);
   cellKeys = new Set(cells.map(keyOf));
   tiles = cells.map((cell) => makeTile(cell));
   units = new Map();
-  placeStart(-MAP_RADIUS, MAP_RADIUS, 'blue');
-  placeStart(MAP_RADIUS, -MAP_RADIUS, 'red');
+  placeStart(-mapRadius, mapRadius, 'blue');
+  placeStart(mapRadius, -mapRadius, 'red');
   resetTurnActions('blue');
   resetTurnActions('red');
 }
 
 function setupEasyAiGame(enemyCount = 1) {
-  cells = buildRadiusCells(SOLO_START_RADIUS);
+  cells = buildRadiusCells(soloStartRadius);
   cellKeys = new Set(cells.map(keyOf));
   tiles = cells.map((cell) => makeTile(cell));
   units = new Map();
@@ -700,7 +788,7 @@ function setupEasyAiGame(enemyCount = 1) {
   const blueStart = { q: 0, r: 0 };
   placeStart(blueStart.q, blueStart.r, 'blue');
 
-  const starts = computeEvenAiStarts(blueStart, MAP_RADIUS * 2, aiOpponentCount);
+  const starts = computeEvenAiStarts(blueStart, enemySpawnDistance, aiOpponentCount);
   starts.forEach((start, idx) => placeStart(start.q, start.r, aiPlayers[idx]));
 
   resetTurnActionsForPlayers(turnOrder);
@@ -708,7 +796,7 @@ function setupEasyAiGame(enemyCount = 1) {
 }
 
 function revealExpandingTiles() {
-  if (gameMode !== 'solo' && gameMode !== 'easy-ai' && gameMode !== 'online') return;
+  if (gameMode !== 'solo' && gameMode !== 'easy-ai' && gameMode !== 'online' && !(gameMode === 'duo' && mapUnlimited)) return;
   const unitsNow = [...units.entries()].filter(([, u]) => {
     if (gameMode === 'solo') return u.player === 'blue';
     return true; // easy-ai + online reveal around both sides.
@@ -728,7 +816,7 @@ function revealExpandingTiles() {
 }
 
 function setupSoloGame() {
-  cells = buildRadiusCells(SOLO_START_RADIUS);
+  cells = buildRadiusCells(soloStartRadius);
   cellKeys = new Set(cells.map(keyOf));
   tiles = cells.map((cell) => makeTile(cell));
   units = new Map();
@@ -763,6 +851,7 @@ function startGame(mode) {
   resourceFocus = null;
   resourceHover = null;
   applyPrimitivityIndex(primitivityIndexEl?.value || primitivityIndex);
+  applyMapSettings();
   if (mode === 'solo') {
     turnOrder = ['blue'];
     setupSoloGame();
@@ -969,6 +1058,7 @@ let panStartScrollLeft = 0;
 let panStartScrollTop = 0;
 let animationFrameHandle = null;
 const activeAnimations = [];
+const coreMosaicTemplateCache = new Map();
 let suppressAutoRender = false;
 let showActionHelp = false;
 
@@ -1264,12 +1354,13 @@ function isUnitUpkeepFree(player, key, unit, tileSnapshot = tiles) {
 function computeEconomy(player, tileSnapshot = tiles, unitSnapshot = units) {
   const produced = Object.fromEntries(resourceKeys.map((k) => [k, 0]));
   const used = Object.fromEntries(resourceKeys.map((k) => [k, 0]));
+  const prodCtx = buildProductionContext(tileSnapshot);
 
   for (const tile of tileSnapshot) {
     if (tile.owner !== player) continue;
 
     const prodKey = productionByType[tile.type];
-    if (prodKey) produced[prodKey] += productionQtyForTile(player, tile, tileSnapshot, unitSnapshot);
+    if (prodKey) produced[prodKey] += productionQtyForTile(player, tile, tileSnapshot, unitSnapshot, prodCtx);
 
     const sNeed = structureUpkeep[tile.type] || {};
     for (const [res, amt] of Object.entries(sNeed)) used[res] += amt;
@@ -1288,13 +1379,14 @@ function computeEconomy(player, tileSnapshot = tiles, unitSnapshot = units) {
 
 function getResourceContributors(player, resource, mode, tileSnapshot = tiles, unitSnapshot = units) {
   const out = new Set();
+  const prodCtx = buildProductionContext(tileSnapshot);
   for (const tile of tileSnapshot) {
     if (tile.owner !== player) continue;
     const key = keyOf(tile);
 
     if (mode === 'produced') {
       const prodKey = productionByType[tile.type];
-      if (prodKey === resource && productionQtyForTile(player, tile, tileSnapshot, unitSnapshot) > 0) out.add(key);
+      if (prodKey === resource && productionQtyForTile(player, tile, tileSnapshot, unitSnapshot, prodCtx) > 0) out.add(key);
       continue;
     }
 
@@ -2215,7 +2307,7 @@ function renderSelectionPanel() {
         costHtml += formatCostChip(res, amt, state);
       }
       costHtml += '</span>';
-      html += `<button class="action-btn ${blocked ? 'blocked' : ''}" data-train-unit="${ut}" ${blocked ? 'disabled' : ''}>Train ${(UNIT_DEFS[ut]?.emoji || '❓')} ${ut}${costHtml}</button>`;
+      html += `<button class="action-btn ${blocked ? 'blocked' : ''}" data-train-unit="${ut}" ${blocked ? 'disabled' : ''}>Train ${(UNIT_DEFS[ut]?.emoji || '❓')} ${displayUnitName(ut)}${costHtml}</button>`;
       if (showActionHelp) {
         html += `<div class="action-help">${unitDescriptions[ut] || 'Trainable unit.'}</div>`;
       }
@@ -2243,7 +2335,7 @@ function renderSelectionPanel() {
         costHtml += formatCostChip(res, displayAmt, state);
       }
       costHtml += '</span>';
-      html += `<button class="action-btn ${blocked ? 'blocked' : ''}" data-upgrade-unit="${newType}" ${blocked ? 'disabled' : ''}>Upgrade Unit → ${(UNIT_DEFS[newType]?.emoji || '❓')} ${newType}${costHtml}</button>`;
+      html += `<button class="action-btn ${blocked ? 'blocked' : ''}" data-upgrade-unit="${newType}" ${blocked ? 'disabled' : ''}>Upgrade Unit → ${(UNIT_DEFS[newType]?.emoji || '❓')} ${displayUnitName(newType)}${costHtml}</button>`;
       if (showActionHelp) {
         html += `<div class="action-help">${unitDescriptions[newType] || 'Unit upgrade option.'}</div>`;
       }
@@ -2524,6 +2616,7 @@ function render(logs = []) {
   board.innerHTML = '';
   applyBoardZoom();
   const targets = selectedKey ? new Set(getTargets(selectedKey)) : new Set();
+  const prodCtx = buildProductionContext(tiles);
   const activeFocus = resourceHover || resourceFocus;
   const focusedKeys = activeFocus ? getResourceContributors(currentPlayer, activeFocus.resource, activeFocus.mode) : null;
 
@@ -2586,6 +2679,10 @@ function render(logs = []) {
       }
     }
 
+    for (const tc of tileCenters) {
+      renderCoreMosaicForTile(mosaicGroup, tc.tile, tc.pos, miniRadius);
+    }
+
     for (const mini of globalMini) {
       const nearTiles = [];
       let minDist = Infinity;
@@ -2621,6 +2718,11 @@ function render(logs = []) {
           }
         }
       }
+
+      const isInteriorMini = insideAnyCount === samplePts.length
+        && centerHits.length === 1
+        && [...overlapCounts.keys()].every((tc) => tc === primaryTile);
+      if (isInteriorMini) continue; // already pre-rendered by cached core tile mosaic.
 
       const candidates = [...overlapCounts.entries()]
         .filter(([, count]) => count > 0)
@@ -2772,7 +2874,7 @@ function render(logs = []) {
       board.appendChild(text);
     });
 
-    const prodBoost = productionQtyForTile(tile.owner, tile) - 1;
+    const prodBoost = productionQtyForTile(tile.owner, tile, tiles, units, prodCtx) - 1;
     if (tile.owner && prodBoost > 0) {
       const fillerPool = BONUS_SYMBOLS[tile.type] || ['✨', '✦', '·', '•', '✧', '◦'];
       for (let i = 0; i < 6; i += 1) {
@@ -3095,6 +3197,9 @@ helpToggleBtn?.addEventListener('click', () => {
 primitivityIndexEl?.addEventListener('input', () => {
   applyPrimitivityIndex(primitivityIndexEl.value);
 });
+mapSizeEl?.addEventListener('input', applyMapSettings);
+enemyDistanceEl?.addEventListener('input', applyMapSettings);
+mapUnlimitedEl?.addEventListener('change', applyMapSettings);
 
 
 if (boardWrap) {
