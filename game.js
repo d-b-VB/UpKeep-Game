@@ -511,7 +511,7 @@ function getCoreMosaicTemplate(tileType, miniRadius) {
       const localPos = axialToPixelLocal({ q: dmq, r: dmr }, miniRadius);
       const samplePts = polygonVertices(localPos, miniRadius);
       const insideCount = samplePts.filter(([x, y]) => pointInPolygon(x, y, bigHex)).length;
-      if (insideCount < 4) continue;
+      if (insideCount < 3) continue;
 
       const idx = ((dmq - dmr) % 3 + 3) % 3;
       minis.push({ localPos, idx, fill: colorForTileShard({ type: tileType }, idx) });
@@ -2726,13 +2726,14 @@ function render(logs = []) {
         }
       }
 
+      if (hitCounts.size <= 1) continue; // treat single-tile and void-overhang corners as core-only.
+
       const primaryCount = hitCounts.get(primaryTile) || 0;
       const otherMaxCount = [...hitCounts.entries()]
         .filter(([tc]) => tc !== primaryTile)
         .reduce((best, [, count]) => Math.max(best, count), 0);
 
       const isInteriorMini = centerHits.length === 1
-        && hitCounts.size === 1
         && primaryCount === samplePts.length;
       const isCoreDominantMini = centerHits.length === 1
         && primaryCount >= 4
