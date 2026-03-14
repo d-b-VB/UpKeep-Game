@@ -39,6 +39,7 @@ let soloStartRadius = 2; // starting revealed radius
 let enemySpawnDistance = 12;
 let mapUnlimited = false;
 const ULTRA_MOSAIC = { name: 'Ultra', miniRadius: 5 };
+const MOSAIC_FALLBACK_COLOR = '#bfa77a';
 const PLAYER_COLORS = {
   blue: '#3b82f6',
   red: '#ef4444',
@@ -2740,7 +2741,11 @@ function render(logs = []) {
       const overhang = Math.max(0, 1 - (insideAnyCount / samplePts.length));
       if (overhang > 0) {
         const bgWeight = 0.45 * (overhang ** 1.5);
-        candidates.push({ color: '#0b1230', weight: bgWeight });
+        candidates.push({ color: MOSAIC_FALLBACK_COLOR, weight: bgWeight });
+      }
+
+      if (!candidates.length) {
+        candidates.push({ color: colorForTileShard(primaryTile.tile, mini.idx), weight: 1 });
       }
 
       const miniPoly = document.createElementNS('http://www.w3.org/2000/svg', 'polygon');
