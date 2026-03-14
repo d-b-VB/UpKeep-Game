@@ -504,12 +504,14 @@ function getCoreMosaicTemplate(tileType, miniRadius) {
   const minis = [];
   const accentMinis = [];
   const stepRange = Math.ceil((HEX_RADIUS * 2.2) / miniRadius);
+  const bigHex = polygonVertices({ x: 0, y: 0 }, HEX_RADIUS);
 
   for (let dmq = -stepRange; dmq <= stepRange; dmq += 1) {
     for (let dmr = -stepRange; dmr <= stepRange; dmr += 1) {
       const localPos = axialToPixelLocal({ q: dmq, r: dmr }, miniRadius);
-      const verts = polygonVertices(localPos, miniRadius);
-      if (!verts.every(([x, y]) => pointInPolygon(x, y, polygonVertices({ x: 0, y: 0 }, HEX_RADIUS)))) continue;
+      const samplePts = polygonVertices(localPos, miniRadius);
+      const insideCount = samplePts.filter(([x, y]) => pointInPolygon(x, y, bigHex)).length;
+      if (insideCount < 4) continue;
 
       const idx = ((dmq - dmr) % 3 + 3) % 3;
       minis.push({ localPos, idx, fill: colorForTileShard({ type: tileType }, idx) });
@@ -2711,30 +2713,33 @@ function render(logs = []) {
 
       // Keep interiors pure (single parent tile color). Blend only at true cross-tile overlap.
       const samplePts = polygonVertices(mini.pos, miniRadius);
-      const overlapCounts = new Map([[primaryTile, samplePts.length]]);
-      let insideAnyCount = samplePts.length;
+      const hitCounts = new Map();
+      let insideAnyCount = 0;
 
       for (const [sx, sy] of samplePts) {
         const hits = nearTiles.filter((tc) => pointInPolygon(sx, sy, tc.poly));
-        if (!hits.length) {
-          insideAnyCount -= 1;
-          continue;
-        }
+        if (!hits.length) continue;
 
-        if (hits.some((tc) => tc !== primaryTile)) {
-          overlapCounts.set(primaryTile, Math.max(0, (overlapCounts.get(primaryTile) || 0) - 1));
-          for (const tc of hits) {
-            overlapCounts.set(tc, (overlapCounts.get(tc) || 0) + 1);
-          }
+        insideAnyCount += 1;
+        for (const tc of hits) {
+          hitCounts.set(tc, (hitCounts.get(tc) || 0) + 1);
         }
       }
 
-      const isInteriorMini = insideAnyCount === samplePts.length
-        && centerHits.length === 1
-        && [...overlapCounts.keys()].every((tc) => tc === primaryTile);
-      if (isInteriorMini) continue; // already pre-rendered by cached core tile mosaic.
+      const primaryCount = hitCounts.get(primaryTile) || 0;
+      const otherMaxCount = [...hitCounts.entries()]
+        .filter(([tc]) => tc !== primaryTile)
+        .reduce((best, [, count]) => Math.max(best, count), 0);
 
-      const candidates = [...overlapCounts.entries()]
+      const isInteriorMini = centerHits.length === 1
+        && hitCounts.size === 1
+        && primaryCount === samplePts.length;
+      const isCoreDominantMini = centerHits.length === 1
+        && primaryCount >= 4
+        && otherMaxCount <= 1;
+      if (isInteriorMini || isCoreDominantMini) continue; // already pre-rendered by cached core tile mosaic.
+
+      const candidates = [...hitCounts.entries()]
         .filter(([, count]) => count > 0)
         .map(([tc, count]) => ({ color: colorForTileShard(tc.tile, mini.idx), weight: count }));
 
