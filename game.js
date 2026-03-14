@@ -38,7 +38,7 @@ let mapRadius = 6; // finite radius for bounded modes
 let soloStartRadius = 2; // starting revealed radius
 let enemySpawnDistance = 12;
 let mapUnlimited = false;
-const ULTRA_MOSAIC = { name: 'Ultra', miniRadius: 7 };
+const ULTRA_MOSAIC = { name: 'Ultra', miniRadius: 6 };
 const PLAYER_COLORS = {
   blue: '#3b82f6',
   red: '#ef4444',
