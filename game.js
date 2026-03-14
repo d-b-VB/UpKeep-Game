@@ -30,15 +30,15 @@ const mapUnlimitedEl = document.getElementById('map-unlimited');
 const enemyDistanceEl = document.getElementById('enemy-distance');
 const enemyDistanceValueEl = document.getElementById('enemy-distance-value');
 
-const HEX_RADIUS = 42;
-const MINI_RADIUS = 8;
+const HEX_RADIUS = 45;
+const MINI_RADIUS = 5;
 const ORIGIN = { x: 980, y: 860 };
 const DIRECTIONS = [[1, 0], [1, -1], [0, -1], [-1, 0], [-1, 1], [0, 1]];
 let mapRadius = 6; // finite radius for bounded modes
 let soloStartRadius = 2; // starting revealed radius
 let enemySpawnDistance = 12;
 let mapUnlimited = false;
-const ULTRA_MOSAIC = { name: 'Ultra', miniRadius: 6 };
+const ULTRA_MOSAIC = { name: 'Ultra', miniRadius: 5 };
 const PLAYER_COLORS = {
   blue: '#3b82f6',
   red: '#ef4444',
