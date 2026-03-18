@@ -147,6 +147,13 @@ const tilePalettes = {
   keep: ['#d0c2ac', '#b6a58b', '#988a72'],
 };
 
+const tilePrimitivityOrder = ['forest', 'pasture', 'farm', 'homestead', 'village', 'town', 'city', 'manor', 'estate', 'palace', 'outpost', 'stronghold', 'keep'];
+const tilePrimitivityRank = new Map(tilePrimitivityOrder.map((type, idx) => [type, idx]));
+
+function primitivityRankForTileType(tileType) {
+  return tilePrimitivityRank.get(tileType) ?? Number.MAX_SAFE_INTEGER;
+}
+
 const productionByType = {
   forest: 'wood', pasture: 'livestock', farm: 'crops', homestead: 'provisions',
   village: 'supplies', town: 'crafts', city: 'luxury',
@@ -399,8 +406,14 @@ function randomType() { return weightedTypes[Math.floor(Math.random() * weighted
 function ownerColor(player) { return PLAYER_COLORS[player] || null; }
 
 function displayUnitName(unitType) {
-  const map = { rangehand: "range hand" };
-  return map[unitType] || unitType.replaceAll("_", " " );
+  const map = { rangehand: 'range hand' };
+  return map[unitType] || unitType.replaceAll('_', ' ');
+}
+
+function displayUnitTextIcon(unitType) {
+  const icon = UNIT_DEFS[unitType]?.emoji || '❓';
+  if (['spear', 'sling'].includes(icon)) return '';
+  return icon;
 }
 
 function aiColorChip(player) {
@@ -1530,7 +1543,11 @@ function resetTurnActions(player) {
 }
 
 function isMeleeMilitary(unitType) {
-  return ['spearman', 'swordsman', 'pikeman', 'infantry_sergeant', 'horseman', 'lancer', 'royal_knight', 'axman'].includes(unitType);
+  return ['spearman', 'swordsman', 'pikeman', 'infantry_sergeant', 'horseman', 'lancer', 'royal_knight'].includes(unitType);
+}
+
+function canMeleeAttackOccupiedTile(unitType) {
+  return ['spearman', 'swordsman', 'pikeman', 'infantry_sergeant', 'horseman', 'lancer', 'royal_knight', 'axman', 'constable', 'crossbow', 'barrage_captain'].includes(unitType);
 }
 
 function isDirectCaptureMilitary(unitType) {
@@ -1919,6 +1936,7 @@ function explainMoveFailure(fromKey, toKey) {
   if (destUnit && destUnit.player === unit.player) return 'Move invalid: destination occupied by your own unit.';
 
   if (destUnit && destUnit.player !== unit.player) {
+    if (!canMeleeAttackOccupiedTile(unit.type)) return `Move invalid: ${unit.type} cannot move onto an enemy-occupied tile.`;
     const canAttackMoveArcher = ['crossbow', 'barrage_captain'].includes(unit.type);
     if (isArcher(unit.type) && !canAttackMoveArcher) return `Move invalid: ${unit.type} cannot attack-move; use ranged attack.`;
     if (canAttackMoveArcher && unit.actionsLeft <= 0) return `Move invalid: ${unit.type} has no attack actions left.`;
@@ -1951,6 +1969,7 @@ function canMove(fromKey, toKey) {
   }
 
   if (destinationUnit && destinationUnit.player !== unit.player) {
+    if (!canMeleeAttackOccupiedTile(unit.type)) return false;
     const canAttackMoveArcher = ['crossbow', 'barrage_captain'].includes(unit.type);
     if (isArcher(unit.type) && !canAttackMoveArcher) return false;
     if (canAttackMoveArcher && unit.actionsLeft <= 0) return false;
@@ -1961,7 +1980,7 @@ function canMove(fromKey, toKey) {
 }
 
 function isArcher(unitType) {
-  return UNIT_DEFS[unitType]?.cls === 'archer';
+  return UNIT_DEFS[unitType]?.cls === 'archer' || unitType === 'cavalry_archer';
 }
 
 function archerRange(unitType) {
@@ -2319,7 +2338,8 @@ function renderSelectionPanel() {
         costHtml += formatCostChip(res, amt, state);
       }
       costHtml += '</span>';
-      html += `<button class="action-btn ${blocked ? 'blocked' : ''}" data-train-unit="${ut}" ${blocked ? 'disabled' : ''}>Train ${(UNIT_DEFS[ut]?.emoji || '❓')} ${displayUnitName(ut)}${costHtml}</button>`;
+      const iconLabel = displayUnitTextIcon(ut);
+      html += `<button class="action-btn ${blocked ? 'blocked' : ''}" data-train-unit="${ut}" ${blocked ? 'disabled' : ''}>Train ${iconLabel ? `${iconLabel} ` : ''}${displayUnitName(ut)}${costHtml}</button>`;
       if (showActionHelp) {
         html += `<div class="action-help">${unitDescriptions[ut] || 'Trainable unit.'}</div>`;
       }
@@ -2347,7 +2367,8 @@ function renderSelectionPanel() {
         costHtml += formatCostChip(res, displayAmt, state);
       }
       costHtml += '</span>';
-      html += `<button class="action-btn ${blocked ? 'blocked' : ''}" data-upgrade-unit="${newType}" ${blocked ? 'disabled' : ''}>Upgrade Unit → ${(UNIT_DEFS[newType]?.emoji || '❓')} ${displayUnitName(newType)}${costHtml}</button>`;
+      const iconLabel = displayUnitTextIcon(newType);
+      html += `<button class="action-btn ${blocked ? 'blocked' : ''}" data-upgrade-unit="${newType}" ${blocked ? 'disabled' : ''}>Upgrade Unit → ${iconLabel ? `${iconLabel} ` : ''}${displayUnitName(newType)}${costHtml}</button>`;
       if (showActionHelp) {
         html += `<div class="action-help">${unitDescriptions[newType] || 'Unit upgrade option.'}</div>`;
       }
@@ -2740,32 +2761,28 @@ function render(logs = []) {
         && otherMaxCount <= 1;
       if (isInteriorMini || isCoreDominantMini) continue; // already pre-rendered by cached core tile mosaic.
 
-      const candidates = [...hitCounts.entries()]
-        .filter(([, count]) => count > 0)
-        .map(([tc, count]) => ({ color: colorForTileShard(tc.tile, mini.idx), weight: count }));
+      const touchingTiles = [...hitCounts.keys()].filter((tc) => (hitCounts.get(tc) || 0) > 0);
+      if (!touchingTiles.length) continue;
 
-      const overhang = Math.max(0, 1 - (insideAnyCount / samplePts.length));
-      if (overhang > 0) {
-        const bgWeight = 0.45 * (overhang ** 1.5);
-        candidates.push({ color: MOSAIC_FALLBACK_COLOR, weight: bgWeight });
-      }
+      const chosenTile = touchingTiles.reduce((best, tc) => {
+        if (!best) return tc;
+        return primitivityRankForTileType(tc.tile.type) < primitivityRankForTileType(best.tile.type) ? tc : best;
+      }, null) || primaryTile;
 
-      if (!candidates.length) {
-        candidates.push({ color: colorForTileShard(primaryTile.tile, mini.idx), weight: 1 });
-      }
-
+      const seamOpacity = hitCounts.size >= 3 ? 0.34 : 0.5;
       const miniPoly = document.createElementNS('http://www.w3.org/2000/svg', 'polygon');
       miniPoly.setAttribute('points', polygonPoints(mini.pos, miniRadius));
-      miniPoly.setAttribute('fill', mixHexWeighted(candidates));
+      miniPoly.setAttribute('fill', colorForTileShard(chosenTile.tile, mini.idx) || MOSAIC_FALLBACK_COLOR);
       miniPoly.setAttribute('stroke', 'none');
+      miniPoly.setAttribute('opacity', String(seamOpacity));
       mosaicGroup.appendChild(miniPoly);
 
-      if (mini.idx === 2 && primaryTile.tile.owner) {
+      if (mini.idx === 2 && chosenTile.tile.owner) {
         const accent = document.createElementNS('http://www.w3.org/2000/svg', 'polygon');
         accent.setAttribute('points', polygonPoints(mini.pos, miniRadius * 0.5));
-        accent.setAttribute('fill', accentColorForTileShard(primaryTile.tile, 2) || '#ffffff');
+        accent.setAttribute('fill', accentColorForTileShard(chosenTile.tile, 2) || '#ffffff');
         accent.setAttribute('stroke', 'none');
-        accent.setAttribute('opacity', '0.95');
+        accent.setAttribute('opacity', String(Math.min(0.95, seamOpacity + 0.22)));
         mosaicGroup.appendChild(accent);
       }
     }
