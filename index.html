@@ -1,0 +1,133 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>UpKeep Browser Prototype</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <div id="mode-menu" class="mode-menu">
+      <div class="mode-card">
+        <h2>Choose Mode</h2>
+        <p>2-player is the current head-to-head map. 1-player starts on 19 tiles and reveals more world as units approach.</p>
+        <details class="mode-help">
+          <summary>How to play</summary>
+          <ul>
+            <li>Grow economy by owning productive tiles (top-down resources in the side panel are your priority chain).</li>
+            <li>Train units on owned settlements/fortifications, then move/attack to claim territory.</li>
+            <li>Upgrade terrain and settlements to unlock higher-tier units and resources.</li>
+            <li>Avoid shortages: negative available resources can disband units/lose structures at end turn.</li>
+            <li>Closed terrain blocks some movement/attacks; use forts/settlements and unit types tactically.</li>
+          </ul>
+
+          <details class="progression-diagram">
+            <summary>Progression diagram: terrain & structures</summary>
+            <div class="diagram-flow">
+              <button type="button" data-upkeep-target="forest">🌲 forest</button> →
+              <button type="button" data-upkeep-target="pasture">🐑 pasture</button> →
+              <button type="button" data-upkeep-target="farm">🌾 farm</button> →
+              <button type="button" data-upkeep-target="homestead">🏠 homestead</button>
+            </div>
+            <div class="diagram-flow">↳ settlement: <button type="button" data-upkeep-target="village">🏘️ village</button> → <button type="button" data-upkeep-target="town">🏙️ town</button> → <button type="button" data-upkeep-target="city">🏛️ city</button></div>
+            <div class="diagram-flow">↳ great house: <button type="button" data-upkeep-target="manor">🏯 manor</button> → <button type="button" data-upkeep-target="estate">🏦 estate</button> → <button type="button" data-upkeep-target="palace">👑 palace</button></div>
+            <div class="diagram-flow">↳ fortification: <button type="button" data-upkeep-target="outpost">🛡️ outpost</button> → <button type="button" data-upkeep-target="stronghold">🧱 stronghold</button> → <button type="button" data-upkeep-target="keep">🏰 keep</button></div>
+            <div class="diagram-info">Click any node to view upkeep/mechanics.</div>
+          </details>
+
+          <details class="progression-diagram">
+            <summary>Unit guide: abilities, upkeep, training, lore</summary>
+            <div class="unit-guide-grid">
+              <div><strong>Worker lines</strong><br>Worker/Axman/Laborer/Surveyor/Architect shape the map and economy. In-world: they are settlers, foremen, and survey corps building frontier infrastructure while moving with the army.</div>
+              <div><strong>Infantry</strong><br>Spearman/Swordsman/Pikeman/Sergeant hold lanes and pressure closed terrain. Spearmen can stabilize farms in lore, representing mixed militia-farming duties while stationed.</div>
+              <div><strong>Archers</strong><br>Hunter/Longbow/Crossbow/Barrage Captain project force before melee. Lore: these are trained skirmish and siege lines operating from prepared positions and supply hubs.</div>
+              <div><strong>Cavalry</strong><br>Horseman/Lancer/Cavalry Archer/Royal Knight handle mobility and breakthroughs. Lore: mounted nobles and outriders exploit roads/fields and punish exposed fronts.</div>
+              <div><strong>Training sources</strong><br>Settlements train the civil + line troops; great houses train support specialists; forts train defensive elites. Higher tiers reflect stronger local institutions and logistics.</div>
+              <div><strong>Upkeep logic</strong><br>Upkeep represents food, draft animals, and command overhead. Free-upkeep zones (e.g., forts) model depots/quartermasters sustaining garrisons in place.</div>
+            </div>
+          </details>
+        </details>
+        <div class="mode-actions">
+          <button id="start-1p" type="button">Start 1 Player</button>
+          <button id="start-2p" type="button">Start 2 Player</button>
+          <div class="ai-start-row">
+            <button id="start-easy-ai" type="button">Start vs Easy AI</button>
+            <button id="start-medium-ai" type="button">Start vs Medium AI</button>
+            <label for="ai-enemy-count">Enemies</label>
+            <select id="ai-enemy-count" aria-label="AI enemy count">
+              <option value="1" selected>1</option>
+              <option value="2">2</option>
+              <option value="3">3</option>
+              <option value="4">4</option>
+              <option value="5">5</option>
+              <option value="6">6</option>
+            </select>
+          </div>
+          <button id="start-online" type="button">Start Online 2 Player</button>
+        </div>
+        <div class="primitivity-control">
+          <label for="primitivity-index">Primitivity Index: <span id="primitivity-index-value">85%</span></label>
+          <input id="primitivity-index" type="range" min="15" max="100" step="1" value="85" />
+        </div>
+        <div class="map-settings">
+          <label for="map-size">Map size radius: <span id="map-size-value">6</span></label>
+          <input id="map-size" type="range" min="4" max="12" step="1" value="6" />
+          <label class="inline-toggle"><input id="map-unlimited" type="checkbox" /> Unlimited map expansion</label>
+          <label for="enemy-distance">Enemy distance: <span id="enemy-distance-value">12</span></label>
+          <input id="enemy-distance" type="range" min="6" max="24" step="1" value="12" />
+        </div>
+        <details class="online-connect" id="online-connect">
+          <summary>Online 2-player handshake (host/join)</summary>
+          <p class="online-help">Use copy/paste signaling: Host (Player 1 / blue) creates offer, Joiner (Player 2 / red) pastes offer to create answer, Host pastes answer to connect.</p>
+          <div class="online-row">
+            <button id="online-host-offer" type="button">1) Host: Create Offer</button>
+            <button id="online-join-answer" type="button">2) Join: Create Answer</button>
+            <button id="online-host-apply-answer" type="button">3) Host: Apply Answer</button>
+          </div>
+          <label for="online-local-signal">Your signal (send this):</label>
+          <textarea id="online-local-signal" rows="5" spellcheck="false"></textarea>
+          <label for="online-remote-signal">Remote signal (paste here):</label>
+          <textarea id="online-remote-signal" rows="5" spellcheck="false"></textarea>
+          <div id="online-status" class="online-status">Not connected.</div>
+        </details>
+
+        <details class="sling-preview-card">          <summary>Preview: custom sling glyph concept</summary>
+          <div class="sling-preview-wrap" aria-label="Sling concept preview">
+            <svg width="110" height="82" viewBox="0 0 110 82" role="img" aria-label="Simple sling with stone">
+              <path d="M 52 24 Q 55 45 58 24" fill="none" stroke="#f8fafc" stroke-width="4" stroke-linecap="round"/>
+              <circle cx="55" cy="33" r="6" fill="#cbd5e1" stroke="#0f172a" stroke-width="2"/>
+            </svg>
+            <p>Just the sling + rock (no person), for visual review before replacing the boomerang icon.</p>
+          </div>
+        </details>
+      </div>
+    </div>
+    <main class="game-shell">
+      <h1>UpKeep Browser Prototype</h1>
+      <p class="instructions">Massive map + full roster pass: train units, upgrade terrain, and manage upkeep shortages.</p>
+      <p id="status" class="status" aria-live="polite"></p>
+
+      <div class="layout">
+        <div id="board-wrap" class="board-wrap">
+          <svg id="hex-board" viewBox="0 0 2200 1900" aria-label="Hex map"></svg>
+        </div>
+
+        <aside class="panel">
+          <h2>Controls</h2>
+          <button id="end-turn" type="button">End Turn</button>
+          <button id="help-toggle" type="button" title="Toggle action descriptions">❔ Help: Off</button>
+          <div id="ai-turn-indicator" class="ai-turn-indicator hidden" aria-live="polite"></div>
+          <div class="zoom-controls">
+            <button id="zoom-out" type="button">Zoom −</button>
+            <button id="zoom-reset" type="button">Zoom 100%</button>
+            <button id="zoom-in" type="button">Zoom +</button>
+          </div>
+          <div id="resources" class="resources"></div>
+          <div id="selection" class="selection"></div>
+        </aside>
+      </div>
+    </main>
+    <script src="easy-ai.js"></script>
+    <script src="game.js"></script>
+  </body>
+</html>
