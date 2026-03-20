@@ -13,6 +13,7 @@ const modeMenuEl = document.getElementById('mode-menu');
 const start1pBtn = document.getElementById('start-1p');
 const start2pBtn = document.getElementById('start-2p');
 const startEasyAiBtn = document.getElementById('start-easy-ai');
+const startMediumAiBtn = document.getElementById('start-medium-ai');
 const aiEnemyCountEl = document.getElementById('ai-enemy-count');
 const startOnlineBtn = document.getElementById('start-online');
 const onlineConnectEl = document.getElementById('online-connect');
@@ -39,7 +40,6 @@ let soloStartRadius = 2; // starting revealed radius
 let enemySpawnDistance = 12;
 let mapUnlimited = false;
 const ULTRA_MOSAIC = { name: 'Ultra', miniRadius: 5 };
-const MOSAIC_FALLBACK_COLOR = '#bfa77a';
 const PLAYER_COLORS = {
   blue: '#3b82f6',
   red: '#ef4444',
@@ -146,13 +146,6 @@ const tilePalettes = {
   stronghold: ['#b0b0b0', '#8f8f8f', '#cacaca'],
   keep: ['#d0c2ac', '#b6a58b', '#988a72'],
 };
-
-const tilePrimitivityOrder = ['forest', 'pasture', 'farm', 'homestead', 'village', 'town', 'city', 'manor', 'estate', 'palace', 'outpost', 'stronghold', 'keep'];
-const tilePrimitivityRank = new Map(tilePrimitivityOrder.map((type, idx) => [type, idx]));
-
-function primitivityRankForTileType(tileType) {
-  return tilePrimitivityRank.get(tileType) ?? Number.MAX_SAFE_INTEGER;
-}
 
 const productionByType = {
   forest: 'wood', pasture: 'livestock', farm: 'crops', homestead: 'provisions',
@@ -427,9 +420,13 @@ function compactEco(player) {
   return `🪵${a.wood || 0} 🐑${a.livestock || 0} 🌾${a.crops || 0} 🥫${a.provisions || 0}`;
 }
 
+function isAiGameMode(mode = gameMode) {
+  return mode === 'easy-ai' || mode === 'medium-ai';
+}
+
 function renderAiTurnIndicator(activePlayer = null, queued = []) {
   if (!aiTurnIndicatorEl) return;
-  if (gameMode !== 'easy-ai') {
+  if (!isAiGameMode()) {
     aiTurnIndicatorEl.classList.add('hidden');
     aiTurnIndicatorEl.innerHTML = '';
     return;
@@ -481,22 +478,6 @@ function hexToRgb(hex) {
   };
 }
 
-function mixHexWeighted(entries) {
-  let tw = 0;
-  let r = 0; let g = 0; let b = 0;
-  for (const e of entries) {
-    const rgb = hexToRgb(e.color);
-    if (!rgb || !e.weight || e.weight <= 0) continue;
-    tw += e.weight;
-    r += rgb.r * e.weight;
-    g += rgb.g * e.weight;
-    b += rgb.b * e.weight;
-  }
-  if (!tw) return '#888888';
-  const toHex = (n) => Math.round(n).toString(16).padStart(2, '0');
-  return `#${toHex(r / tw)}${toHex(g / tw)}${toHex(b / tw)}`;
-}
-
 function colorForTileShard(tile, shardIdx = 1) {
   const palette = tilePalettes[tile.type] || ['#888', '#888', '#888'];
   const baseColor = palette[shardIdx] || palette[1] || palette[0] || '#888';
@@ -524,7 +505,7 @@ function getCoreMosaicTemplate(tileType, miniRadius) {
       const localPos = axialToPixelLocal({ q: dmq, r: dmr }, miniRadius);
       const samplePts = polygonVertices(localPos, miniRadius);
       const insideCount = samplePts.filter(([x, y]) => pointInPolygon(x, y, bigHex)).length;
-      if (insideCount < 3) continue;
+      if (insideCount < 1) continue;
 
       const idx = ((dmq - dmr) % 3 + 3) % 3;
       minis.push({ localPos, idx, fill: colorForTileShard({ type: tileType }, idx) });
@@ -705,11 +686,12 @@ let cells = [];
 let cellKeys = new Set();
 let tiles = [];
 let units = new Map();
-let gameMode = null; // 'solo' | 'duo' | 'easy-ai' | 'online'
+let gameMode = null; // 'solo' | 'duo' | 'easy-ai' | 'medium-ai' | 'online'
 let aiOpponentCount = 1;
 let aiPlayers = ['red'];
 let turnOrder = ['blue', 'red'];
 let startInProgress = false;
+let aiDifficulty = 'easy';
 
 function makeTile(cell) {
   const type = randomType();
@@ -735,12 +717,25 @@ function ensureTile(q, r) {
   return getTile(`${q},${r}`);
 }
 
-function placeStart(q, r, player, type = 'axman') {
+function paintOwnedTile(q, r, player, tileType) {
   const tile = ensureTile(q, r);
-  if (!tile) return;
-  tile.type = 'homestead';
+  if (!tile) return null;
+  tile.type = tileType;
   tile.owner = player;
-  tile.symbols = buildSymbols('homestead');
+  tile.symbols = buildSymbols(tileType);
+  return tile;
+}
+
+function placeStart(q, r, player, type = 'axman') {
+  const tile = paintOwnedTile(q, r, player, 'homestead');
+  if (!tile) return;
+  units.set(`${q},${r}`, { player, type, movesLeft: movePointsFor(type), actionsLeft: actionPointsFor(type) });
+}
+
+function placeMediumAiStart(q, r, player, type = 'axman') {
+  const layout = ['homestead', 'pasture', 'farm', 'forest', 'forest', 'forest'];
+  paintOwnedTile(q, r, player, 'village');
+  DIRECTIONS.forEach(([dq, dr], idx) => paintOwnedTile(q + dq, r + dr, player, layout[idx] || 'forest'));
   units.set(`${q},${r}`, { player, type, movesLeft: movePointsFor(type), actionsLeft: actionPointsFor(type) });
 }
 
@@ -800,7 +795,7 @@ function setupDuoGame() {
   resetTurnActions('red');
 }
 
-function setupEasyAiGame(enemyCount = 1) {
+function setupAiGame(enemyCount = 1, difficulty = 'easy') {
   cells = buildRadiusCells(soloStartRadius);
   cellKeys = new Set(cells.map(keyOf));
   tiles = cells.map((cell) => makeTile(cell));
@@ -814,19 +809,22 @@ function setupEasyAiGame(enemyCount = 1) {
   placeStart(blueStart.q, blueStart.r, 'blue');
 
   const starts = computeEvenAiStarts(blueStart, enemySpawnDistance, aiOpponentCount);
-  starts.forEach((start, idx) => placeStart(start.q, start.r, aiPlayers[idx]));
+  starts.forEach((start, idx) => {
+    if (difficulty === 'medium') placeMediumAiStart(start.q, start.r, aiPlayers[idx]);
+    else placeStart(start.q, start.r, aiPlayers[idx]);
+  });
 
   resetTurnActionsForPlayers(turnOrder);
   revealExpandingTiles();
 }
 
 function revealExpandingTiles() {
-  if (gameMode !== 'solo' && gameMode !== 'easy-ai' && gameMode !== 'online' && !(gameMode === 'duo' && mapUnlimited)) return;
+  if (gameMode !== 'solo' && !isAiGameMode() && gameMode !== 'online' && !(gameMode === 'duo' && mapUnlimited)) return;
   const unitsNow = [...units.entries()].filter(([, u]) => {
     if (gameMode === 'solo') return u.player === 'blue';
-    return true; // easy-ai + online reveal around both sides.
+    return true; // AI + online reveal around both sides.
   });
-  const edgeBuffer = gameMode === 'easy-ai' ? 3 : 0;
+  const edgeBuffer = isAiGameMode() ? 3 : 0;
   for (const [key, unit] of unitsNow) {
     const from = getCellByKey(key);
     const movement = movePointsFor(unit.type);
@@ -857,9 +855,16 @@ function startGame(mode) {
   if (start1pBtn) start1pBtn.disabled = true;
   if (start2pBtn) start2pBtn.disabled = true;
   if (startEasyAiBtn) startEasyAiBtn.disabled = true;
+  if (startMediumAiBtn) startMediumAiBtn.disabled = true;
   if (startOnlineBtn) startOnlineBtn.disabled = true;
   const easyCount = Math.max(1, Math.min(6, Number(aiEnemyCountEl?.value || 1)));
-  const label = mode === 'solo' ? '1-player' : mode === 'easy-ai' ? `easy AI x${easyCount}` : '2-player';
+  const label = mode === 'solo'
+    ? '1-player'
+    : mode === 'easy-ai'
+      ? `easy AI x${easyCount}`
+      : mode === 'medium-ai'
+        ? `medium AI x${easyCount}`
+        : '2-player';
   if (statusText) statusText.textContent = `Starting ${label} game...`;
   if (modeMenuEl) modeMenuEl.classList.add('hidden');
 
@@ -872,7 +877,9 @@ function startGame(mode) {
     ? 'Solo mode: new tiles reveal as units approach them.'
     : mode === 'easy-ai'
       ? `Easy AI mode: ${easyCount} opponent${easyCount === 1 ? '' : 's'} controlled by heuristic AI.`
-      : '';
+      : mode === 'medium-ai'
+        ? `Medium AI mode: ${easyCount} opponent${easyCount === 1 ? '' : 's'} with expanded starting settlements.`
+        : '';
   resourceFocus = null;
   resourceHover = null;
   applyPrimitivityIndex(primitivityIndexEl?.value || primitivityIndex);
@@ -880,8 +887,9 @@ function startGame(mode) {
   if (mode === 'solo') {
     turnOrder = ['blue'];
     setupSoloGame();
-  } else if (mode === 'easy-ai') {
-    setupEasyAiGame(easyCount);
+  } else if (isAiGameMode(mode)) {
+    aiDifficulty = mode === 'medium-ai' ? 'medium' : 'easy';
+    setupAiGame(easyCount, aiDifficulty);
   } else {
     turnOrder = ['blue', 'red'];
     setupDuoGame();
@@ -997,7 +1005,7 @@ function aiActionWouldCauseShortage(action, player = 'red') {
 }
 
 function runEasyAiTurn(finalizeTurn = true) {
-  if (gameMode !== 'easy-ai' || currentPlayer === 'blue') return;
+  if (!isAiGameMode() || currentPlayer === 'blue') return;
   const planner = window.UpKeepEasyAI;
   if (!planner || (!planner.chooseCandidates && !planner.chooseAction)) {
     lastDebug = 'Easy AI unavailable: planner file missing.';
@@ -1834,7 +1842,7 @@ function getLancerRouteMap(fromKey, unit) {
       const usedKill = current.usedKill || hostileOcc;
       const defeatedKey = hostileOcc ? nextKey : current.defeatedKey;
       const path = [...current.path, nextKey];
-      const stateKey = `${nextKey}|${usedKill ? 1 : 0}`;
+      const stateKey = `${nextKey}|${usedKill ? 1 : 0}|${defeatedKey || '-'}`;
 
       if (!routes.has(nextKey) || step > (routes.get(nextKey)?.path?.length || 0) - 1) {
         routes.set(nextKey, { path, defeatedKey });
@@ -2461,15 +2469,15 @@ function renderPikemanGlyph(pos) {
 function renderLancerGlyph(pos) {
   const g = document.createElementNS('http://www.w3.org/2000/svg', 'g');
   const horse = document.createElementNS('http://www.w3.org/2000/svg', 'text');
-  horse.setAttribute('x', String(pos.x - 3));
+  horse.setAttribute('x', String(pos.x - 7));
   horse.setAttribute('y', String(pos.y + 2));
   horse.setAttribute('text-anchor', 'middle');
   horse.setAttribute('class', 'unit-icon');
   horse.textContent = '🐎';
   g.appendChild(horse);
 
-  // Level lance, pointing right.
-  drawSpear(g, pos.x - 15, pos.y - 2, pos.x + 15, pos.y - 2, 3.6);
+  // Level lance, pointing left to match the horse emoji.
+  drawSpear(g, pos.x + 8, pos.y - 2, pos.x - 18, pos.y - 2, 3.6);
   return g;
 }
 
@@ -2671,9 +2679,6 @@ function render(logs = []) {
   // Dominant-bleed mosaic with adjustable resolution.
   const mosaicGroup = document.createElementNS('http://www.w3.org/2000/svg', 'g');
   mosaicGroup.setAttribute('pointer-events', 'none');
-  const edgeCutoff = (HEX_RADIUS * 1.2) ** 2;
-  const fadeEnd = edgeCutoff * 1.18;
-
   const preset = ULTRA_MOSAIC;
   if (!preset.miniRadius) {
     for (const tc of tileCenters) {
@@ -2694,97 +2699,8 @@ function render(logs = []) {
     }
   } else {
     const miniRadius = preset.miniRadius;
-    const minQ = Math.min(...tiles.map((t) => t.q));
-    const maxQ = Math.max(...tiles.map((t) => t.q));
-    const minR = Math.min(...tiles.map((t) => t.r));
-    const maxR = Math.max(...tiles.map((t) => t.r));
-    const pad = 8;
-    const qStart = Math.floor((minQ - pad) * (HEX_RADIUS / miniRadius));
-    const qEnd = Math.ceil((maxQ + pad) * (HEX_RADIUS / miniRadius));
-    const rStart = Math.floor((minR - pad) * (HEX_RADIUS / miniRadius));
-    const rEnd = Math.ceil((maxR + pad) * (HEX_RADIUS / miniRadius));
-
-    const globalMini = [];
-    for (let mq = qStart; mq <= qEnd; mq += 1) {
-      for (let mr = rStart; mr <= rEnd; mr += 1) {
-        const miniPos = axialToPixel({ q: mq, r: mr }, miniRadius);
-        globalMini.push({ mq, mr, pos: miniPos, idx: ((mq - mr) % 3 + 3) % 3 });
-      }
-    }
-
     for (const tc of tileCenters) {
       renderCoreMosaicForTile(mosaicGroup, tc.tile, miniRadius);
-    }
-
-    for (const mini of globalMini) {
-      const nearTiles = [];
-      let minDist = Infinity;
-      for (const tc of tileCenters) {
-        const dx = tc.pos.x - mini.pos.x;
-        const dy = tc.pos.y - mini.pos.y;
-        const d2 = dx * dx + dy * dy;
-        if (d2 < minDist) minDist = d2;
-        if (d2 <= fadeEnd) nearTiles.push(tc);
-      }
-      if (!nearTiles.length || minDist > fadeEnd) continue;
-
-      const centerHits = nearTiles.filter((tc) => pointInPolygon(mini.pos.x, mini.pos.y, tc.poly));
-      const primaryTile = centerHits[0] || null;
-      if (!primaryTile) continue;
-
-      // Keep interiors pure (single parent tile color). Blend only at true cross-tile overlap.
-      const samplePts = polygonVertices(mini.pos, miniRadius);
-      const hitCounts = new Map();
-      let insideAnyCount = 0;
-
-      for (const [sx, sy] of samplePts) {
-        const hits = nearTiles.filter((tc) => pointInPolygon(sx, sy, tc.poly));
-        if (!hits.length) continue;
-
-        insideAnyCount += 1;
-        for (const tc of hits) {
-          hitCounts.set(tc, (hitCounts.get(tc) || 0) + 1);
-        }
-      }
-
-      if (hitCounts.size <= 1) continue; // treat single-tile and void-overhang corners as core-only.
-
-      const primaryCount = hitCounts.get(primaryTile) || 0;
-      const otherMaxCount = [...hitCounts.entries()]
-        .filter(([tc]) => tc !== primaryTile)
-        .reduce((best, [, count]) => Math.max(best, count), 0);
-
-      const isInteriorMini = centerHits.length === 1
-        && primaryCount === samplePts.length;
-      const isCoreDominantMini = centerHits.length === 1
-        && primaryCount >= 4
-        && otherMaxCount <= 1;
-      if (isInteriorMini || isCoreDominantMini) continue; // already pre-rendered by cached core tile mosaic.
-
-      const touchingTiles = [...hitCounts.keys()].filter((tc) => (hitCounts.get(tc) || 0) > 0);
-      if (!touchingTiles.length) continue;
-
-      const chosenTile = touchingTiles.reduce((best, tc) => {
-        if (!best) return tc;
-        return primitivityRankForTileType(tc.tile.type) < primitivityRankForTileType(best.tile.type) ? tc : best;
-      }, null) || primaryTile;
-
-      const seamOpacity = hitCounts.size >= 3 ? 0.34 : 0.5;
-      const miniPoly = document.createElementNS('http://www.w3.org/2000/svg', 'polygon');
-      miniPoly.setAttribute('points', polygonPoints(mini.pos, miniRadius));
-      miniPoly.setAttribute('fill', colorForTileShard(chosenTile.tile, mini.idx) || MOSAIC_FALLBACK_COLOR);
-      miniPoly.setAttribute('stroke', 'none');
-      miniPoly.setAttribute('opacity', String(seamOpacity));
-      mosaicGroup.appendChild(miniPoly);
-
-      if (mini.idx === 2 && chosenTile.tile.owner) {
-        const accent = document.createElementNS('http://www.w3.org/2000/svg', 'polygon');
-        accent.setAttribute('points', polygonPoints(mini.pos, miniRadius * 0.5));
-        accent.setAttribute('fill', accentColorForTileShard(chosenTile.tile, 2) || '#ffffff');
-        accent.setAttribute('stroke', 'none');
-        accent.setAttribute('opacity', String(Math.min(0.95, seamOpacity + 0.22)));
-        mosaicGroup.appendChild(accent);
-      }
     }
   }
   board.appendChild(mosaicGroup);
@@ -3142,7 +3058,7 @@ endTurnBtn.addEventListener('click', () => {
     return;
   }
 
-  if (gameMode === 'easy-ai' && currentPlayer !== 'blue') {
+  if (isAiGameMode() && currentPlayer !== 'blue') {
     lastDebug = 'Wait for AI to complete its turn.';
     render();
     return;
@@ -3151,7 +3067,7 @@ endTurnBtn.addEventListener('click', () => {
   const playersForLogs = gameMode === 'solo' ? ['blue'] : turnOrder;
   const logs = playersForLogs.flatMap((player) => enforceShortages(player));
 
-  if (gameMode === 'easy-ai') {
+  if (isAiGameMode()) {
     selectedKey = null;
     lastDebug = `AI is thinking (${aiPlayers.length} opponent${aiPlayers.length === 1 ? '' : 's'})...`;
     render(logs);
@@ -3202,6 +3118,7 @@ endTurnBtn.addEventListener('click', () => {
 start1pBtn?.addEventListener('click', () => startGame('solo'));
 start2pBtn?.addEventListener('click', () => startGame('duo'));
 startEasyAiBtn?.addEventListener('click', () => startGame('easy-ai'));
+startMediumAiBtn?.addEventListener('click', () => startGame('medium-ai'));
 startOnlineBtn?.addEventListener('click', () => {
   if (onlineConnectEl) onlineConnectEl.open = true;
   setOnlineStatus('Open handshake panel and start host/join flow.');
