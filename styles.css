@@ -40,7 +40,7 @@ body {
 .mode-card h2 { margin: 0 0 8px; }
 .mode-card p { margin: 0; color: #cad6ff; line-height: 1.35; }
 
-.mode-actions { margin-top: 14px; display: flex; gap: 8px; }
+.mode-actions { margin-top: 14px; display: flex; gap: 8px; flex-wrap: wrap; }
 .ai-start-row {
   display: inline-flex;
   align-items: center;

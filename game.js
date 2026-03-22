@@ -16,6 +16,9 @@ const startEasyAiBtn = document.getElementById('start-easy-ai');
 const startMediumAiBtn = document.getElementById('start-medium-ai');
 const aiEnemyCountEl = document.getElementById('ai-enemy-count');
 const startOnlineBtn = document.getElementById('start-online');
+const saveGameBtn = document.getElementById('save-game');
+const loadGameBtn = document.getElementById('load-game');
+const loadGameInput = document.getElementById('load-game-input');
 const onlineConnectEl = document.getElementById('online-connect');
 const onlineHostOfferBtn = document.getElementById('online-host-offer');
 const onlineJoinAnswerBtn = document.getElementById('online-join-answer');
@@ -692,6 +695,19 @@ let aiPlayers = ['red'];
 let turnOrder = ['blue', 'red'];
 let startInProgress = false;
 let aiDifficulty = 'easy';
+let economyRevision = 1;
+const economyCache = new Map();
+const resourceContributorCache = new Map();
+
+function invalidateEconomyCaches() {
+  economyRevision += 1;
+  economyCache.clear();
+  resourceContributorCache.clear();
+}
+
+function isLiveEconomyState(tileSnapshot = tiles, unitSnapshot = units) {
+  return tileSnapshot === tiles && unitSnapshot === units;
+}
 
 function makeTile(cell) {
   const type = randomType();
@@ -723,6 +739,7 @@ function paintOwnedTile(q, r, player, tileType) {
   tile.type = tileType;
   tile.owner = player;
   tile.symbols = buildSymbols(tileType);
+  invalidateEconomyCaches();
   return tile;
 }
 
@@ -789,6 +806,7 @@ function setupDuoGame() {
   cellKeys = new Set(cells.map(keyOf));
   tiles = cells.map((cell) => makeTile(cell));
   units = new Map();
+  invalidateEconomyCaches();
   placeStart(-mapRadius, mapRadius, 'blue');
   placeStart(mapRadius, -mapRadius, 'red');
   resetTurnActions('blue');
@@ -800,6 +818,7 @@ function setupAiGame(enemyCount = 1, difficulty = 'easy') {
   cellKeys = new Set(cells.map(keyOf));
   tiles = cells.map((cell) => makeTile(cell));
   units = new Map();
+  invalidateEconomyCaches();
 
   aiOpponentCount = Math.max(1, Math.min(6, Number(enemyCount) || 1));
   aiPlayers = AI_PLAYER_ORDER.slice(0, aiOpponentCount);
@@ -843,6 +862,7 @@ function setupSoloGame() {
   cellKeys = new Set(cells.map(keyOf));
   tiles = cells.map((cell) => makeTile(cell));
   units = new Map();
+  invalidateEconomyCaches();
   placeStart(0, 0, 'blue');
   resetTurnActions('blue');
   revealExpandingTiles();
@@ -1124,6 +1144,44 @@ function serializeState() {
   };
 }
 
+function buildSaveFileText() {
+  return JSON.stringify({
+    format: 'upkeep-save-v1',
+    savedAt: new Date().toISOString(),
+    state: serializeState(),
+  }, null, 2);
+}
+
+function triggerGameSaveDownload() {
+  const text = buildSaveFileText();
+  const blob = new Blob([text], { type: 'text/plain;charset=utf-8' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `upkeep-save-${new Date().toISOString().replace(/[:.]/g, '-')}.txt`;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+  lastDebug = 'Saved current game state to .txt file.';
+  render();
+}
+
+function parseSavedGameText(text) {
+  const parsed = JSON.parse(text);
+  if (parsed?.format === 'upkeep-save-v1' && parsed.state) return parsed.state;
+  if (parsed?.tiles && parsed?.units && parsed?.cells) return parsed;
+  throw new Error('Unsupported save format.');
+}
+
+function applyLoadedGameText(text) {
+  const payload = parseSavedGameText(text);
+  if (modeMenuEl) modeMenuEl.classList.add('hidden');
+  applySerializedState(payload);
+  lastDebug = 'Loaded saved game state from file.';
+  render();
+}
+
 function applySerializedState(payload) {
   if (!payload) return;
   gameMode = payload.gameMode || 'online';
@@ -1137,6 +1195,7 @@ function applySerializedState(payload) {
     movesLeft: u.movesLeft,
     actionsLeft: u.actionsLeft,
   }]));
+  invalidateEconomyCaches();
   selectedKey = null;
   render();
 }
@@ -1385,6 +1444,10 @@ function isUnitUpkeepFree(player, key, unit, tileSnapshot = tiles) {
 }
 
 function computeEconomy(player, tileSnapshot = tiles, unitSnapshot = units) {
+  const useCache = isLiveEconomyState(tileSnapshot, unitSnapshot);
+  const cacheKey = `${economyRevision}|${player}`;
+  if (useCache && economyCache.has(cacheKey)) return economyCache.get(cacheKey);
+
   const produced = Object.fromEntries(resourceKeys.map((k) => [k, 0]));
   const used = Object.fromEntries(resourceKeys.map((k) => [k, 0]));
   const prodCtx = buildProductionContext(tileSnapshot);
@@ -1406,11 +1469,17 @@ function computeEconomy(player, tileSnapshot = tiles, unitSnapshot = units) {
   }
 
   const available = Object.fromEntries(resourceKeys.map((k) => [k, produced[k] - used[k]]));
-  return { produced, used, available };
+  const eco = { produced, used, available };
+  if (useCache) economyCache.set(cacheKey, eco);
+  return eco;
 }
 
 
 function getResourceContributors(player, resource, mode, tileSnapshot = tiles, unitSnapshot = units) {
+  const useCache = isLiveEconomyState(tileSnapshot, unitSnapshot);
+  const cacheKey = `${economyRevision}|${player}|${resource}|${mode}`;
+  if (useCache && resourceContributorCache.has(cacheKey)) return resourceContributorCache.get(cacheKey);
+
   const out = new Set();
   const prodCtx = buildProductionContext(tileSnapshot);
   for (const tile of tileSnapshot) {
@@ -1427,6 +1496,7 @@ function getResourceContributors(player, resource, mode, tileSnapshot = tiles, u
     const u = unitSnapshot.get(key);
     if (u && u.player === player && !isUnitUpkeepFree(player, key, u, tileSnapshot) && ((unitUpkeep[u.type] || {})[resource] || 0) > 0) out.add(key);
   }
+  if (useCache) resourceContributorCache.set(cacheKey, out);
   return out;
 }
 
@@ -1516,6 +1586,7 @@ function enforceShortages(player) {
     for (const u of unitConsumers) {
       if (deficit <= 0) break;
       units.delete(u.key);
+      invalidateEconomyCaches();
       logs.push(`${player} disbanded ${u.unitType} at ${u.key} (short ${resource})`);
       deficit -= u.amount;
     }
@@ -1534,6 +1605,7 @@ function enforceShortages(player) {
       if (deficit <= 0) break;
       s.tile.owner = null;
       units.delete(keyOf(s.tile));
+      invalidateEconomyCaches();
       logs.push(`${player} lost ${s.tile.type} at ${keyOf(s.tile)} (short ${resource})`);
       deficit -= s.amount;
     }
@@ -2123,9 +2195,11 @@ function moveUnit(fromKey, toKey) {
   if (passThroughDefeat) units.delete(passThroughDefeat);
   units.set(toKey, unit);
   units.delete(fromKey);
+  invalidateEconomyCaches();
   startMoveAnimation(fromKey, toKey, unit);
 
   const { claimText } = applyTileControlAfterMove(destTile, currentPlayer, unit.type, tiles, units);
+  invalidateEconomyCaches();
   const lancerKillText = passThroughDefeat ? ` pass-through eliminated enemy at ${passThroughDefeat}.` : '';
 
   lastDebug = `Move ok: ${unit.type} moved to ${toKey}, ${claimText}.${lancerKillText} ${warning}`.trim();
@@ -2154,6 +2228,7 @@ function upgradeTileAt(key, toType) {
   unit.actionsLeft -= 1;
   tile.type = toType;
   tile.symbols = buildSymbols(toType);
+  invalidateEconomyCaches();
   lastDebug = `Upgrade ok: ${key} -> ${toType}.`;
   if (!suppressAutoRender) render();
   return true;
@@ -2187,6 +2262,7 @@ function trainUnitAt(key, unitType) {
   }
 
   units.set(key, { player: currentPlayer, type: unitType, movesLeft: 0, actionsLeft: 0 });
+  invalidateEconomyCaches();
   lastDebug = `Training ok: ${unitType} at ${key}.`;
   if (!suppressAutoRender) render();
   return true;
@@ -2204,6 +2280,7 @@ function upgradeUnitAt(key, newType) {
 
   unit.type = newType;
   unit.actionsLeft -= 1;
+  invalidateEconomyCaches();
   lastDebug = `Unit upgrade ok: ${key} -> ${newType}.`;
   if (!suppressAutoRender) render();
 }
@@ -2602,6 +2679,33 @@ function renderRoyalKnightGlyph(pos) {
   return g;
 }
 
+function buildTerrainLayerKey(tileSnapshot = tiles) {
+  return tileSnapshot.map((tile) => `${tile.q},${tile.r}:${tile.type}:${tile.owner || '-'}:${(tile.symbols || []).join('')}`).join('|');
+}
+
+function ensureBoardLayers() {
+  let terrainLayer = board.querySelector('#terrain-layer');
+  let overlayLayer = board.querySelector('#overlay-layer');
+  let animationLayer = board.querySelector('#animation-layer');
+
+  if (!terrainLayer || !overlayLayer || !animationLayer) {
+    board.innerHTML = '';
+
+    terrainLayer = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+    terrainLayer.setAttribute('id', 'terrain-layer');
+    overlayLayer = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+    overlayLayer.setAttribute('id', 'overlay-layer');
+    animationLayer = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+    animationLayer.setAttribute('id', 'animation-layer');
+
+    board.appendChild(terrainLayer);
+    board.appendChild(overlayLayer);
+    board.appendChild(animationLayer);
+  }
+
+  return { terrainLayer, overlayLayer, animationLayer };
+}
+
 function renderUnitGlyph(unit, pos, group) {
   if (unit.type === 'pikeman') {
     group.appendChild(renderPikemanGlyph(pos));
@@ -2654,7 +2758,6 @@ function render(logs = []) {
     const hoveredCell = document.querySelector('[data-resource-hover]:hover');
     if (!hoveredCell) resourceHover = null;
   }
-  board.innerHTML = '';
   applyBoardZoom();
   const targets = selectedKey ? new Set(getTargets(selectedKey)) : new Set();
   const prodCtx = buildProductionContext(tiles);
@@ -2663,6 +2766,7 @@ function render(logs = []) {
 
   const tileCenters = tiles.map((tile) => ({ tile, pos: axialToPixel(tile), poly: polygonVertices(axialToPixel(tile), HEX_RADIUS) }));
   const tileMap = new Map(tiles.map((t) => [keyOf(t), t]));
+  const { terrainLayer, overlayLayer, animationLayer } = ensureBoardLayers();
 
   if (tileCenters.length) {
     const pad = HEX_RADIUS * 2.2;
@@ -2676,34 +2780,68 @@ function render(logs = []) {
     boardBaseHeight = Math.max(700, Math.ceil(maxY - minY));
   }
 
-  // Dominant-bleed mosaic with adjustable resolution.
-  const mosaicGroup = document.createElementNS('http://www.w3.org/2000/svg', 'g');
-  mosaicGroup.setAttribute('pointer-events', 'none');
-  const preset = ULTRA_MOSAIC;
-  if (!preset.miniRadius) {
-    for (const tc of tileCenters) {
-      const solidPoly = document.createElementNS('http://www.w3.org/2000/svg', 'polygon');
-      solidPoly.setAttribute('points', polygonPoints(tc.pos, HEX_RADIUS));
-      solidPoly.setAttribute('fill', colorForTileShard(tc.tile, 1));
-      solidPoly.setAttribute('stroke', 'none');
-      mosaicGroup.appendChild(solidPoly);
+  overlayLayer.innerHTML = '';
+  animationLayer.innerHTML = '';
 
-      if (tc.tile.owner) {
-        const accent = document.createElementNS('http://www.w3.org/2000/svg', 'polygon');
-        accent.setAttribute('points', polygonPoints(tc.pos, HEX_RADIUS * 0.36));
-        accent.setAttribute('fill', accentColorForTileShard(tc.tile, 2) || '#ffffff');
-        accent.setAttribute('stroke', 'none');
-        accent.setAttribute('opacity', '0.95');
-        mosaicGroup.appendChild(accent);
+  const terrainKey = buildTerrainLayerKey(tiles);
+  if (board.dataset.terrainKey !== terrainKey) {
+    terrainLayer.innerHTML = '';
+
+    // Dominant-bleed mosaic with adjustable resolution.
+    const mosaicGroup = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+    mosaicGroup.setAttribute('pointer-events', 'none');
+    const preset = ULTRA_MOSAIC;
+    if (!preset.miniRadius) {
+      for (const tc of tileCenters) {
+        const solidPoly = document.createElementNS('http://www.w3.org/2000/svg', 'polygon');
+        solidPoly.setAttribute('points', polygonPoints(tc.pos, HEX_RADIUS));
+        solidPoly.setAttribute('fill', colorForTileShard(tc.tile, 1));
+        solidPoly.setAttribute('stroke', 'none');
+        mosaicGroup.appendChild(solidPoly);
+
+        if (tc.tile.owner) {
+          const accent = document.createElementNS('http://www.w3.org/2000/svg', 'polygon');
+          accent.setAttribute('points', polygonPoints(tc.pos, HEX_RADIUS * 0.36));
+          accent.setAttribute('fill', accentColorForTileShard(tc.tile, 2) || '#ffffff');
+          accent.setAttribute('stroke', 'none');
+          accent.setAttribute('opacity', '0.95');
+          mosaicGroup.appendChild(accent);
+        }
+      }
+    } else {
+      const miniRadius = preset.miniRadius;
+      for (const tc of tileCenters) {
+        renderCoreMosaicForTile(mosaicGroup, tc.tile, miniRadius);
       }
     }
-  } else {
-    const miniRadius = preset.miniRadius;
-    for (const tc of tileCenters) {
-      renderCoreMosaicForTile(mosaicGroup, tc.tile, miniRadius);
+    terrainLayer.appendChild(mosaicGroup);
+
+    for (const tile of tiles) {
+      const pos = axialToPixel(tile);
+      const houses = new Set(['🏠', '🏡']);
+      tile.symbols.forEach((symbol, i) => {
+        const angle = (Math.PI / 180) * (60 * i - 30);
+        const sx = pos.x + (HEX_RADIUS * 0.5) * Math.cos(angle);
+        const sy = pos.y + (HEX_RADIUS * 0.5) * Math.sin(angle);
+        const text = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+        text.setAttribute('x', String(sx));
+        text.setAttribute('y', String(sy + 5));
+        text.setAttribute('text-anchor', 'middle');
+        text.setAttribute('class', 'symbol');
+        const greatHouseHead = ['manor', 'estate', 'palace'].includes(tile.type) && i === 0;
+        if (houses.has(symbol) || greatHouseHead) {
+          text.style.fontSize = '19.5px';
+          text.style.stroke = 'rgba(10,14,28,0.95)';
+          text.style.strokeWidth = '1.6px';
+          text.style.paintOrder = 'stroke';
+        }
+        text.textContent = symbol;
+        terrainLayer.appendChild(text);
+      });
     }
+
+    board.dataset.terrainKey = terrainKey;
   }
-  board.appendChild(mosaicGroup);
 
   for (const tile of tiles) {
     const key = keyOf(tile);
@@ -2715,7 +2853,7 @@ function render(logs = []) {
     clickableHex.setAttribute('fill', 'transparent');
     clickableHex.setAttribute('stroke', 'none');
     clickableHex.dataset.key = key;
-    board.appendChild(clickableHex);
+    overlayLayer.appendChild(clickableHex);
 
     if (focusedKeys) {
       const isFocus = focusedKeys.has(key);
@@ -2723,7 +2861,7 @@ function render(logs = []) {
       filterPoly.setAttribute('points', polygonPoints(pos, HEX_RADIUS));
       filterPoly.setAttribute('fill', isFocus ? 'rgba(255,255,255,0.20)' : 'rgba(0,0,0,0.20)');
       filterPoly.setAttribute('pointer-events', 'none');
-      board.appendChild(filterPoly);
+      overlayLayer.appendChild(filterPoly);
     }
 
     if (selectedKey === key || targets.has(key)) {
@@ -2732,7 +2870,7 @@ function render(logs = []) {
       outline.setAttribute('points', polygonPoints(pos, HEX_RADIUS));
       outline.setAttribute('fill', 'none');
       outline.dataset.key = key;
-      board.appendChild(outline);
+      overlayLayer.appendChild(outline);
     }
 
     if (tile.owner === currentPlayer) {
@@ -2767,7 +2905,7 @@ function render(logs = []) {
         edge.setAttribute('stroke-width', '3');
         edge.setAttribute('stroke-linecap', 'round');
         edge.setAttribute('pointer-events', 'none');
-        board.appendChild(edge);
+        overlayLayer.appendChild(edge);
       }
     }
 
@@ -2791,7 +2929,7 @@ function render(logs = []) {
         a.setAttribute('stroke-width', '1.9');
         a.setAttribute('stroke-linecap', 'round');
         a.setAttribute('pointer-events', 'none');
-        board.appendChild(a);
+        overlayLayer.appendChild(a);
 
         const b = document.createElementNS('http://www.w3.org/2000/svg', 'line');
         b.setAttribute('x1', String(mx + sz));
@@ -2802,30 +2940,9 @@ function render(logs = []) {
         b.setAttribute('stroke-width', '1.9');
         b.setAttribute('stroke-linecap', 'round');
         b.setAttribute('pointer-events', 'none');
-        board.appendChild(b);
+        overlayLayer.appendChild(b);
       }
     }
-
-    const houses = new Set(['🏠', '🏡']);
-    tile.symbols.forEach((symbol, i) => {
-      const angle = (Math.PI / 180) * (60 * i - 30);
-      const sx = pos.x + (HEX_RADIUS * 0.5) * Math.cos(angle);
-      const sy = pos.y + (HEX_RADIUS * 0.5) * Math.sin(angle);
-      const text = document.createElementNS('http://www.w3.org/2000/svg', 'text');
-      text.setAttribute('x', String(sx));
-      text.setAttribute('y', String(sy + 5));
-      text.setAttribute('text-anchor', 'middle');
-      text.setAttribute('class', 'symbol');
-      const greatHouseHead = ['manor', 'estate', 'palace'].includes(tile.type) && i === 0;
-      if (houses.has(symbol) || greatHouseHead) {
-        text.style.fontSize = '19.5px';
-        text.style.stroke = 'rgba(10,14,28,0.95)';
-        text.style.strokeWidth = '1.6px';
-        text.style.paintOrder = 'stroke';
-      }
-      text.textContent = symbol;
-      board.appendChild(text);
-    });
 
     const prodBoost = productionQtyForTile(tile.owner, tile, tiles, units, prodCtx) - 1;
     if (tile.owner && prodBoost > 0) {
@@ -2842,7 +2959,7 @@ function render(logs = []) {
         f.style.fontSize = '6.5px';
         f.style.opacity = '0.9';
         f.textContent = fillerPool[(i + Math.max(1, prodBoost)) % fillerPool.length];
-        board.appendChild(f);
+        overlayLayer.appendChild(f);
       }
     }
 
@@ -2917,7 +3034,7 @@ function render(logs = []) {
       }
 
       renderUnitGlyph(unit, pos, group);
-      board.appendChild(group);
+      overlayLayer.appendChild(group);
     }
   }
 
@@ -2938,7 +3055,7 @@ function render(logs = []) {
       ring.style.strokeWidth = '2.4px';
       group.appendChild(ring);
       renderUnitGlyph(anim.unit, { x, y }, group);
-      board.appendChild(group);
+      animationLayer.appendChild(group);
     }
 
     if (anim.type === 'shot') {
@@ -2957,7 +3074,7 @@ function render(logs = []) {
       shaft.setAttribute('stroke', '#f8fafc');
       shaft.setAttribute('stroke-width', '2.4');
       shaft.setAttribute('stroke-linecap', 'round');
-      board.appendChild(shaft);
+      animationLayer.appendChild(shaft);
 
       const head = document.createElementNS('http://www.w3.org/2000/svg', 'polygon');
       const hx1 = x;
@@ -2968,7 +3085,7 @@ function render(logs = []) {
       const hy3 = y - Math.sin(angle + 0.35) * 7;
       head.setAttribute('points', `${hx1},${hy1} ${hx2},${hy2} ${hx3},${hy3}`);
       head.setAttribute('fill', '#f8fafc');
-      board.appendChild(head);
+      animationLayer.appendChild(head);
 
       const f1 = document.createElementNS('http://www.w3.org/2000/svg', 'line');
       const f2 = document.createElementNS('http://www.w3.org/2000/svg', 'line');
@@ -2988,7 +3105,7 @@ function render(logs = []) {
         f.setAttribute('stroke', '#f8fafc');
         f.setAttribute('stroke-width', '2');
         f.setAttribute('stroke-linecap', 'round');
-        board.appendChild(f);
+        animationLayer.appendChild(f);
       }
     }
   }
@@ -3122,6 +3239,29 @@ startMediumAiBtn?.addEventListener('click', () => startGame('medium-ai'));
 startOnlineBtn?.addEventListener('click', () => {
   if (onlineConnectEl) onlineConnectEl.open = true;
   setOnlineStatus('Open handshake panel and start host/join flow.');
+});
+saveGameBtn?.addEventListener('click', () => {
+  try {
+    triggerGameSaveDownload();
+  } catch (error) {
+    lastDebug = `Save failed: ${error?.message || error}`;
+    render();
+  }
+});
+loadGameBtn?.addEventListener('click', () => loadGameInput?.click());
+loadGameInput?.addEventListener('change', async (event) => {
+  const input = event.currentTarget;
+  const file = input?.files?.[0];
+  if (!file) return;
+  try {
+    const text = await file.text();
+    applyLoadedGameText(text);
+  } catch (error) {
+    lastDebug = `Load failed: ${error?.message || error}`;
+    render();
+  } finally {
+    if (input) input.value = '';
+  }
 });
 onlineHostOfferBtn?.addEventListener('click', () => hostCreateOffer().catch((e) => setOnlineStatus(`Host offer error: ${e.message}`)));
 onlineJoinAnswerBtn?.addEventListener('click', () => joinCreateAnswer().catch((e) => setOnlineStatus(`Join answer error: ${e.message}`)));
