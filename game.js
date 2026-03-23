@@ -17,7 +17,9 @@ const startMediumAiBtn = document.getElementById('start-medium-ai');
 const aiEnemyCountEl = document.getElementById('ai-enemy-count');
 const startOnlineBtn = document.getElementById('start-online');
 const saveGameBtn = document.getElementById('save-game');
+const saveGamePanelBtn = document.getElementById('save-game-panel');
 const loadGameBtn = document.getElementById('load-game');
+const loadGamePanelBtn = document.getElementById('load-game-panel');
 const loadGameInput = document.getElementById('load-game-input');
 const onlineConnectEl = document.getElementById('online-connect');
 const onlineHostOfferBtn = document.getElementById('online-host-offer');
@@ -2287,26 +2289,39 @@ function upgradeUnitAt(key, newType) {
 
 function renderResources() {
   const eco = computeEconomy(currentPlayer);
+  const shortages = resourceKeys.filter((key) => (eco.available[key] || 0) < 0);
   resourcesEl.innerHTML = `
-    <strong>${currentPlayer.toUpperCase()} economy</strong>
-    <table style="width:100%;font-size:12px;border-collapse:collapse;margin-top:6px;">
-      <thead><tr><th style="text-align:left;">Resource</th><th>Produced / Used</th><th>Avail</th></tr></thead>
-      <tbody>
-        ${resourceKeys.map((k) => {
-          const avail = eco.available[k];
-          const availStyle = avail < 0 ? 'color:#ef4444;font-weight:700;text-align:center;' : 'text-align:center;';
-          const isFocused = resourceFocus?.resource === k;
-          const chipStyle = isFocused ? 'background:#334155;border-color:#94a3b8;' : 'background:transparent;border-color:#475569;';
-          const divider = (k === 'provisions' || k === 'support') ? '<tr class="resource-row-divider"><td colspan="4"></td></tr>' : '';
-          return `${divider}<tr>
-            <td><button data-resource-toggle="${k}" class="resource-toggle-btn" style="border:1px solid;${chipStyle}color:#e2e8f0;border-radius:7px;padding:1px 6px;cursor:pointer;">${resourceEmojiWithMosaic(k)}</button> ${k}</td>
-            <td data-resource-hover="${k}" data-resource-mode="produced" style="text-align:center;cursor:help;">${eco.produced[k]} / ${eco.used[k]}</td>
-            <td style="${availStyle}">${avail}</td>
-          </tr>`;
-        }).join('')}
-      </tbody>
-    </table>
-    <div style="margin-top:6px;font-size:12px;opacity:.85;">Click resource emoji to cycle production/usage highlights. Hover Produced/Used for temporary highlight.</div>
+    <div class="resource-summary">
+      <strong>${currentPlayer.toUpperCase()} economy</strong>
+      <span class="resource-summary-note">${shortages.length ? `Shortages: ${shortages.join(', ')}` : 'Click an icon to pin highlights; hover Produced or Used for a quick preview.'}</span>
+    </div>
+    <div class="resource-card-grid">
+      ${resourceKeys.map((k) => {
+        const avail = eco.available[k] || 0;
+        const isFocused = resourceFocus?.resource === k;
+        const isNegative = avail < 0;
+        return `<article class="resource-card ${isFocused ? 'is-focused' : ''} ${isNegative ? 'is-negative' : ''}">
+          <div class="resource-card-header">
+            <div class="resource-name">
+              <button data-resource-toggle="${k}" class="resource-toggle-btn" type="button">${resourceEmojiWithMosaic(k)}</button>
+              <span class="resource-title">${k}</span>
+            </div>
+            <span class="resource-available ${isNegative ? 'negative' : ''}">${avail}</span>
+          </div>
+          <div class="resource-breakdown">
+            <button class="resource-stat" type="button" data-resource-hover="${k}" data-resource-mode="produced">
+              <span class="resource-stat-label">Produced</span>
+              <span class="resource-stat-value">${eco.produced[k] || 0}</span>
+            </button>
+            <button class="resource-stat" type="button" data-resource-hover="${k}" data-resource-mode="used">
+              <span class="resource-stat-label">Used</span>
+              <span class="resource-stat-value">${eco.used[k] || 0}</span>
+            </button>
+          </div>
+        </article>`;
+      }).join('')}
+    </div>
+    <div class="resource-hint">Available = produced minus upkeep. Red cards indicate end-turn shortages.</div>
   `;
 
   resourcesEl.querySelectorAll('[data-resource-toggle]').forEach((btn) => {
@@ -2329,7 +2344,15 @@ function renderResources() {
       resourceHover = { resource: cell.getAttribute('data-resource-hover'), mode: cell.getAttribute('data-resource-mode') };
       render();
     });
+    cell.addEventListener('focus', () => {
+      resourceHover = { resource: cell.getAttribute('data-resource-hover'), mode: cell.getAttribute('data-resource-mode') };
+      render();
+    });
     cell.addEventListener('mouseleave', () => {
+      resourceHover = null;
+      render();
+    });
+    cell.addEventListener('blur', () => {
       resourceHover = null;
       render();
     });
@@ -2376,7 +2399,7 @@ function missingResourcesForTileUpgrade(player, fromType, toType) {
 
 function renderSelectionPanel() {
   if (!selectedKey) {
-    selectionEl.innerHTML = 'Select a tile/unit to see actions.';
+    selectionEl.innerHTML = 'Select a tile or unit on the map to see its actions here.';
     return;
   }
 
@@ -3226,7 +3249,7 @@ endTurnBtn.addEventListener('click', () => {
   resetTurnActions(currentPlayer);
   revealExpandingTiles();
   selectedKey = null;
-  lastDebug = 'Turn advanced. Economy table reflects continuous produced/used/available flow';
+  lastDebug = 'Turn advanced. The top resource strip reflects continuous produced/used/available flow.';
   render(logs);
   renderAiTurnIndicator(null, []);
   syncOnlineStateIfHost();
@@ -3240,15 +3263,19 @@ startOnlineBtn?.addEventListener('click', () => {
   if (onlineConnectEl) onlineConnectEl.open = true;
   setOnlineStatus('Open handshake panel and start host/join flow.');
 });
-saveGameBtn?.addEventListener('click', () => {
-  try {
-    triggerGameSaveDownload();
-  } catch (error) {
-    lastDebug = `Save failed: ${error?.message || error}`;
-    render();
-  }
+[saveGameBtn, saveGamePanelBtn].filter(Boolean).forEach((button) => {
+  button.addEventListener('click', () => {
+    try {
+      triggerGameSaveDownload();
+    } catch (error) {
+      lastDebug = `Save failed: ${error?.message || error}`;
+      render();
+    }
+  });
 });
-loadGameBtn?.addEventListener('click', () => loadGameInput?.click());
+[loadGameBtn, loadGamePanelBtn].filter(Boolean).forEach((button) => {
+  button.addEventListener('click', () => loadGameInput?.click());
+});
 loadGameInput?.addEventListener('change', async (event) => {
   const input = event.currentTarget;
   const file = input?.files?.[0];
