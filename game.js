@@ -2294,7 +2294,7 @@ function renderResources() {
     <table class="resource-table">
       <thead>
         <tr>
-          <th class="resource-player-cell">${currentPlayer.toUpperCase()}<br>eco</th>
+          <th class="resource-player-cell">${currentPlayer.toUpperCase()} eco</th>
           ${resourceKeys.map((k) => {
             const isFocused = activeFocus?.resource === k;
             const isNegative = (eco.available[k] || 0) < 0;

@@ -149,17 +149,18 @@ button:disabled { opacity: 0.45; cursor: not-allowed; }
 .selection button { margin-top: 6px; width: 100%; text-align: left; }
 
 .resource-table {
-  width: 100%;
-  min-width: 940px;
+  width: max-content;
   border-collapse: collapse;
-  table-layout: fixed;
-  font-size: 0.78rem;
+  table-layout: auto;
+  font-size: 0.75rem;
+  line-height: 1.05;
+  white-space: nowrap;
 }
 
 .resource-table th,
 .resource-table td {
   border: 1px solid rgba(71, 85, 105, 0.8);
-  padding: 4px 5px;
+  padding: 2px 4px;
   text-align: center;
   vertical-align: middle;
 }
@@ -169,21 +170,24 @@ button:disabled { opacity: 0.45; cursor: not-allowed; }
 }
 
 .resource-label-cell {
-  width: 66px;
-  font-size: 0.72rem;
+  width: auto;
+  font-size: 0.68rem;
   font-weight: 700;
-  color: #cbd5e1;
+  color: rgba(203, 213, 225, 0.72);
   text-transform: uppercase;
   letter-spacing: 0.04em;
 }
 
 .resource-player-cell {
-  width: 66px;
+  width: auto;
   text-align: left;
-  font-size: 0.76rem;
+  font-size: 0.7rem;
   font-weight: 700;
-  line-height: 1.1;
-  color: #f8fafc;
+  color: rgba(248, 250, 252, 0.82);
+}
+
+.resource-header-cell {
+  min-width: 11ch;
 }
 
 .resource-header-cell.is-focused,
@@ -198,7 +202,7 @@ button:disabled { opacity: 0.45; cursor: not-allowed; }
 
 .resource-header-btn,
 .resource-value-btn {
-  width: 100%;
+  width: auto;
   padding: 0;
   border: 0;
   background: transparent;
@@ -207,33 +211,38 @@ button:disabled { opacity: 0.45; cursor: not-allowed; }
 }
 
 .resource-header-btn {
-  display: grid;
-  justify-items: center;
-  gap: 2px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
   cursor: pointer;
 }
 
 .resource-header-name {
-  font-size: 0.69rem;
-  line-height: 1.05;
+  font-size: 0.68rem;
+  line-height: 1;
 }
 
 .resource-value-btn {
-  font-size: 0.82rem;
+  min-width: 100%;
+  font-size: 0.76rem;
+  font-weight: 500;
   font-variant-numeric: tabular-nums;
+  color: rgba(226, 232, 240, 0.62);
   cursor: help;
 }
 
 .resource-value-btn.is-active {
   color: #f8fafc;
   text-decoration: underline;
-  text-underline-offset: 0.14em;
+  text-underline-offset: 0.12em;
 }
 
 .resource-available-value {
-  font-size: 0.84rem;
-  font-weight: 700;
+  font-size: 0.79rem;
+  font-weight: 800;
   font-variant-numeric: tabular-nums;
+  color: #f8fafc;
 }
 
 .resource-available-value.negative {
