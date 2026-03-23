@@ -2289,39 +2289,54 @@ function upgradeUnitAt(key, newType) {
 
 function renderResources() {
   const eco = computeEconomy(currentPlayer);
-  const shortages = resourceKeys.filter((key) => (eco.available[key] || 0) < 0);
+  const activeFocus = resourceHover || resourceFocus;
   resourcesEl.innerHTML = `
-    <div class="resource-summary">
-      <strong>${currentPlayer.toUpperCase()} economy</strong>
-      <span class="resource-summary-note">${shortages.length ? `Shortages: ${shortages.join(', ')}` : 'Click an icon to pin highlights; hover Produced or Used for a quick preview.'}</span>
-    </div>
-    <div class="resource-card-grid">
-      ${resourceKeys.map((k) => {
-        const avail = eco.available[k] || 0;
-        const isFocused = resourceFocus?.resource === k;
-        const isNegative = avail < 0;
-        return `<article class="resource-card ${isFocused ? 'is-focused' : ''} ${isNegative ? 'is-negative' : ''}">
-          <div class="resource-card-header">
-            <div class="resource-name">
-              <button data-resource-toggle="${k}" class="resource-toggle-btn" type="button">${resourceEmojiWithMosaic(k)}</button>
-              <span class="resource-title">${k}</span>
-            </div>
-            <span class="resource-available ${isNegative ? 'negative' : ''}">${avail}</span>
-          </div>
-          <div class="resource-breakdown">
-            <button class="resource-stat" type="button" data-resource-hover="${k}" data-resource-mode="produced">
-              <span class="resource-stat-label">Produced</span>
-              <span class="resource-stat-value">${eco.produced[k] || 0}</span>
-            </button>
-            <button class="resource-stat" type="button" data-resource-hover="${k}" data-resource-mode="used">
-              <span class="resource-stat-label">Used</span>
-              <span class="resource-stat-value">${eco.used[k] || 0}</span>
-            </button>
-          </div>
-        </article>`;
-      }).join('')}
-    </div>
-    <div class="resource-hint">Available = produced minus upkeep. Red cards indicate end-turn shortages.</div>
+    <table class="resource-table">
+      <thead>
+        <tr>
+          <th class="resource-player-cell">${currentPlayer.toUpperCase()}<br>eco</th>
+          ${resourceKeys.map((k) => {
+            const isFocused = activeFocus?.resource === k;
+            const isNegative = (eco.available[k] || 0) < 0;
+            return `<th class="resource-header-cell ${isFocused ? 'is-focused' : ''} ${isNegative ? 'is-negative' : ''}">
+              <button data-resource-toggle="${k}" class="resource-header-btn" type="button">
+                ${resourceEmojiWithMosaic(k)}
+                <span class="resource-header-name">${k}</span>
+              </button>
+            </th>`;
+          }).join('')}
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <th class="resource-label-cell">Prod</th>
+          ${resourceKeys.map((k) => {
+            const isActive = activeFocus?.resource === k && activeFocus?.mode === 'produced';
+            return `<td class="resource-value-cell ${isActive ? 'is-focused' : ''}">
+              <button class="resource-value-btn ${isActive ? 'is-active' : ''}" type="button" data-resource-hover="${k}" data-resource-mode="produced">${eco.produced[k] || 0}</button>
+            </td>`;
+          }).join('')}
+        </tr>
+        <tr>
+          <th class="resource-label-cell">Used</th>
+          ${resourceKeys.map((k) => {
+            const isActive = activeFocus?.resource === k && activeFocus?.mode === 'used';
+            return `<td class="resource-value-cell ${isActive ? 'is-focused' : ''}">
+              <button class="resource-value-btn ${isActive ? 'is-active' : ''}" type="button" data-resource-hover="${k}" data-resource-mode="used">${eco.used[k] || 0}</button>
+            </td>`;
+          }).join('')}
+        </tr>
+        <tr>
+          <th class="resource-label-cell">Avail</th>
+          ${resourceKeys.map((k) => {
+            const avail = eco.available[k] || 0;
+            return `<td class="resource-value-cell ${avail < 0 ? 'is-negative' : ''}">
+              <span class="resource-available-value ${avail < 0 ? 'negative' : ''}">${avail}</span>
+            </td>`;
+          }).join('')}
+        </tr>
+      </tbody>
+    </table>
   `;
 
   resourcesEl.querySelectorAll('[data-resource-toggle]').forEach((btn) => {

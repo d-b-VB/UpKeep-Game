@@ -46,7 +46,7 @@ Then open:
 - `http://localhost:4173/`
 
 ## Controls
-- Resource information is pinned across the top of the game screen, with save/load, turn controls, zoom, and unit actions in the right sidebar.
+- A compact economy table is pinned across the top of the game screen, with save/load, turn controls, zoom, and unit actions in the right sidebar.
 - Click or tap a highlighted adjacent hex to move the selected unit.
 - Keyboard: tab to a highlighted hex, then press `Enter` or `Space`.
 - Use **Save Game** at the mode menu or in the in-game sidebar to export the current match, and **Load Game** to restore a saved `.txt`/JSON state file.

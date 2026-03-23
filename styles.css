@@ -65,27 +65,24 @@ body {
   box-sizing: border-box;
   padding: 10px;
   display: grid;
-  grid-template-rows: auto auto auto minmax(0, 1fr);
+  grid-template-rows: auto auto minmax(0, 1fr);
   gap: 10px;
 }
 
-.game-header {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 12px;
+.status {
+  margin: 0;
+  min-height: 1.2rem;
+  color: #e3e9ff;
+  font-size: 0.95rem;
 }
-
-h1 { margin: 0 0 0.25rem; }
-.instructions { margin: 0; color: #c8d2ff; }
-.status { margin: 0; color: #e3e9ff; min-height: 1.2rem; }
 
 .resource-strip {
   background: rgba(8, 12, 24, 0.72);
   border: 1px solid rgba(255, 255, 255, 0.15);
   border-radius: 16px;
-  padding: 10px 12px;
-  overflow: hidden;
+  padding: 8px 10px;
+  overflow-x: auto;
+  overflow-y: hidden;
 }
 
 .layout { display: grid; grid-template-columns: minmax(0, 1fr) 340px; gap: 12px; min-height: 0; }
@@ -151,112 +148,96 @@ button:disabled { opacity: 0.45; cursor: not-allowed; }
 .resources, .selection { font-size: 0.92rem; line-height: 1.4; }
 .selection button { margin-top: 6px; width: 100%; text-align: left; }
 
-.resource-summary {
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: 10px;
-  margin-bottom: 8px;
-  flex-wrap: wrap;
+.resource-table {
+  width: 100%;
+  min-width: 940px;
+  border-collapse: collapse;
+  table-layout: fixed;
+  font-size: 0.78rem;
 }
 
-.resource-summary strong {
-  font-size: 1rem;
+.resource-table th,
+.resource-table td {
+  border: 1px solid rgba(71, 85, 105, 0.8);
+  padding: 4px 5px;
+  text-align: center;
+  vertical-align: middle;
 }
 
-.resource-summary-note {
+.resource-table thead th {
+  background: rgba(15, 23, 42, 0.9);
+}
+
+.resource-label-cell {
+  width: 66px;
+  font-size: 0.72rem;
+  font-weight: 700;
   color: #cbd5e1;
-  font-size: 0.8rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
 }
 
-.resource-card-grid {
+.resource-player-cell {
+  width: 66px;
+  text-align: left;
+  font-size: 0.76rem;
+  font-weight: 700;
+  line-height: 1.1;
+  color: #f8fafc;
+}
+
+.resource-header-cell.is-focused,
+.resource-value-cell.is-focused {
+  background: rgba(30, 41, 59, 0.92);
+}
+
+.resource-header-cell.is-negative,
+.resource-value-cell.is-negative {
+  background: rgba(69, 10, 10, 0.52);
+}
+
+.resource-header-btn,
+.resource-value-btn {
+  width: 100%;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  border-radius: 0;
+}
+
+.resource-header-btn {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
-  gap: 8px;
+  justify-items: center;
+  gap: 2px;
+  cursor: pointer;
 }
 
-.resource-card {
-  background: rgba(15, 23, 42, 0.75);
-  border: 1px solid rgba(100, 116, 139, 0.55);
-  border-radius: 12px;
-  padding: 8px;
-  display: grid;
-  gap: 5px;
+.resource-header-name {
+  font-size: 0.69rem;
+  line-height: 1.05;
 }
 
-.resource-card.is-focused {
-  border-color: rgba(191, 219, 254, 0.92);
-  box-shadow: 0 0 0 1px rgba(191, 219, 254, 0.22) inset;
+.resource-value-btn {
+  font-size: 0.82rem;
+  font-variant-numeric: tabular-nums;
+  cursor: help;
 }
 
-.resource-card.is-negative {
-  border-color: rgba(239, 68, 68, 0.7);
+.resource-value-btn.is-active {
+  color: #f8fafc;
+  text-decoration: underline;
+  text-underline-offset: 0.14em;
 }
 
-.resource-card-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 6px;
-}
-
-.resource-name {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  min-width: 0;
-}
-
-.resource-name button {
-  padding: 2px 6px;
-}
-
-.resource-title {
-  font-weight: 600;
-  text-transform: capitalize;
-}
-
-.resource-available {
+.resource-available-value {
+  font-size: 0.84rem;
   font-weight: 700;
   font-variant-numeric: tabular-nums;
 }
 
-.resource-available.negative {
+.resource-available-value.negative {
   color: #fca5a5;
-}
-
-.resource-breakdown {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 6px;
-}
-
-.resource-stat {
-  width: 100%;
-  border: 1px solid rgba(71, 85, 105, 0.9);
-  border-radius: 9px;
-  padding: 5px 6px;
-  background: rgba(2, 6, 23, 0.35);
-  text-align: left;
-  color: #e2e8f0;
-  cursor: help;
-}
-
-.resource-stat-label {
-  display: block;
-  font-size: 0.72rem;
-  color: #94a3b8;
-}
-
-.resource-stat-value {
-  font-size: 0.95rem;
-  font-variant-numeric: tabular-nums;
-}
-
-.resource-hint {
-  margin-top: 8px;
-  color: #94a3b8;
-  font-size: 0.78rem;
 }
 
 .mode-help {
