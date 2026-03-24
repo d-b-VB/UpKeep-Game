@@ -165,6 +165,10 @@ const structureUpkeep = {
   manor: { supplies: 1, livestock: 1 },
   estate: { supplies: 1, crafts: 1, support: 1, livestock: 1, wood: 1 },
   palace: { supplies: 1, crafts: 1, support: 1, authority: 1, wood: 1, livestock: 1, crops: 1 },
+  manor: { supplies: 1, livestock: 1 },
+  estate: { supplies: 1, crafts: 1, support: 1, livestock: 1, wood: 1 },
+  palace: { supplies: 1, crafts: 1, support: 1, authority: 1, wood: 1, livestock: 1, crops: 1 },
+
   outpost: { supplies: 1 },
   stronghold: { crafts: 1 },
   keep: { luxury: 1 },
@@ -201,6 +205,10 @@ const unitUpkeep = {
   spearman: { crops: 1 }, swordsman: { crops: 1 }, pikeman: { crops: 1 }, infantry_sergeant: { support: 1, crops: 1 },
   hunter: { crops: 1, wood: 1 }, longbow: { crops: 1, wood: 1 }, crossbow: { crops: 1, wood: 1 }, barrage_captain: { authority: 1, wood: 1, crops: 1 },
   horseman: { crops: 1, livestock: 1 }, lancer: { crops: 1, livestock: 1 }, cavalry_archer: { crops: 1, wood: 1, livestock: 1 }, royal_knight: { sovereignty: 1, crops: 1, livestock: 1 },
+  spearman: { crops: 1 }, swordsman: { crops: 1 }, pikeman: { crops: 1 }, infantry_sergeant: { support: 1, crops: 1 },
+  hunter: { crops: 1, wood: 1 }, longbow: { crops: 1, wood: 1 }, crossbow: { crops: 1, wood: 1 }, barrage_captain: { authority: 1, wood: 1, crops: 1 },
+  horseman: { crops: 1, livestock: 1 }, lancer: { crops: 1, livestock: 1 }, cavalry_archer: { crops: 1, wood: 1, livestock: 1 }, royal_knight: { sovereignty: 1, crops: 1, livestock: 1 },
+
 };
 
 const freeUnitCondition = {
@@ -209,6 +217,9 @@ const freeUnitCondition = {
   axman: (tile) => tile.type === 'forest',
   spearman: (tile) => tile.type === 'farm',
   hunter: (tile) => tile.type === 'forest',
+  hunter: (tile) => tile.type === 'forest',
+
+  
   horseman: (tile) => tile.type === 'pasture',
   rangehand: (tile) => tile.type === 'pasture',
   surveyor: (tile) => tile.type === 'pasture',
@@ -398,6 +409,9 @@ const unitDescriptions = {
   lancer: 'Fast cavalry with follow-through movement.',
   cavalry_archer: 'Hybrid cavalry/ranged pressure unit.',
   royal_knight: 'Keep-trained elite cavalry granting adjacent soldiers free upkeep and freer motion on owned closed tiles.',
+
+  
+  
 };
 
 function keyOf(cell) { return `${cell.q},${cell.r}`; }
@@ -586,6 +600,10 @@ function productionQtyForTile(player, tile, tileSnapshot = tiles, unitSnapshot =
   let qty = 1 + laborerBoost + estateAdj + constableAdj;
   if (settlementTypes.has(tile.type)) {
     qty += manorAdj + palaceCount;
+  let qty = 1 + laborerBoost + estateAdj + constableAdj;
+  if (settlementTypes.has(tile.type)) {
+    qty += manorAdj + palaceCount;
+
   }
 
   return Math.max(1, qty);
@@ -1420,6 +1438,8 @@ function isMilitaryUnitType(unitType) {
 }
 
 function isUnitUpkeepFree(player, key, unit, tileSnapshot = tiles, unitSnapshot = units) {
+function isUnitUpkeepFree(player, key, unit, tileSnapshot = tiles, unitSnapshot = units) {
+
   const tileMap = new Map(tileSnapshot.map((t) => [keyOf(t), t]));
   const tile = tileMap.get(key);
   if (!tile || !unit) return false;
@@ -1442,6 +1462,7 @@ function isUnitUpkeepFree(player, key, unit, tileSnapshot = tiles, unitSnapshot 
     && isMilitaryUnitType(unit.type);
   if (freeByRoyalKnight) return true;
 
+  
   if (!isMilitaryUnitType(unit.type)) return false;
 
   const ownFort = tile.owner === player && ['outpost', 'stronghold', 'keep'].includes(tile.type);
@@ -1478,6 +1499,8 @@ function computeEconomy(player, tileSnapshot = tiles, unitSnapshot = units) {
   for (const [unitKey, unit] of unitSnapshot.entries()) {
     if (unit.player !== player) continue;
     if (isUnitUpkeepFree(player, unitKey, unit, tileSnapshot, unitSnapshot)) continue;
+
+    
     const uNeed = unitUpkeep[unit.type] || {};
     for (const [res, amt] of Object.entries(uNeed)) used[res] += amt;
   }
@@ -1878,6 +1901,11 @@ function getCavalryDestinations(fromKey, unit) {
       const nextTile = getTile(nextKey);
       const royalClaimedOverride = unit.type === 'royal_knight' && nextTile?.owner === startPlayer;
       const nextClosed = royalClaimedOverride ? false : isTileClosedFor(startPlayer, nextKey);
+      const nextTile = getTile(nextKey);
+      const royalClaimedOverride = unit.type === 'royal_knight' && nextTile?.owner === startPlayer;
+      const nextClosed = royalClaimedOverride ? false : isTileClosedFor(startPlayer, nextKey);
+
+      
 
       // Cavalry may pass through open tiles and friendlies, but not through hostile units.
       const hostileOcc = occ && occ.player !== startPlayer;
@@ -3406,6 +3434,10 @@ function initInstructionDiagrams() {
     manor: 'Upkeep: 1 village output (supplies), 1 livestock.',
     estate: 'Upkeep: 1 village, 1 town, 1 manor output plus 1 livestock and 1 wood.',
     palace: 'Upkeep: 1 village, 1 town, 1 manor, 1 estate output plus 1 wood, 1 livestock, 1 crops.',
+    manor: 'Upkeep: 1 village output (supplies), 1 livestock.',
+    estate: 'Upkeep: 1 village, 1 town, 1 manor output plus 1 livestock and 1 wood.',
+    palace: 'Upkeep: 1 village, 1 town, 1 manor, 1 estate output plus 1 wood, 1 livestock, 1 crops.',
+
     outpost: 'Requires village support. Closed to enemies.',
     stronghold: 'Requires town support. Adjacent tiles closed to enemies.',
     keep: 'Requires city support. Adjacent military upkeep relief.',
