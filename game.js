@@ -889,7 +889,8 @@ function startGame(mode) {
   if (modeMenuEl) modeMenuEl.classList.add('hidden');
 
   // Let the menu hide paint first so startup work doesn't look like a frozen click.
-  requestAnimationFrame(() => {
+  const raf = (typeof window !== 'undefined' && window.requestAnimationFrame) ? window.requestAnimationFrame.bind(window) : ((cb) => setTimeout(cb, 0));
+  raf(() => {
     try {
       gameMode = mode;
       currentPlayer = 'blue';
@@ -1829,9 +1830,6 @@ function getRoadedInfantryWorkerDestinations(fromKey, unit) {
 
   for (let qi = 0; qi < queue.length; qi += 1) {
     const current = queue[qi];
-  for (let qi = 0; qi < queue.length; qi += 1) {
-    const current = queue[qi];
-    
     for (const nextKey of adjacentKeys(current.key)) {
       const step = current.steps + 1;
       if (step > 2) continue;
@@ -1882,10 +1880,6 @@ function getCavalryDestinations(fromKey, unit) {
 
   for (let qi = 0; qi < queue.length; qi += 1) {
     const current = queue[qi];
-  for (let qi = 0; qi < queue.length; qi += 1) {
-    const current = queue[qi];
-
-    
 
     for (const nextKey of adjacentKeys(current.key)) {
       const step = current.steps + 1;
@@ -1929,8 +1923,6 @@ function getLancerRouteMap(fromKey, unit) {
 
   for (let qi = 0; qi < queue.length; qi += 1) {
     const current = queue[qi];
-  for (let qi = 0; qi < queue.length; qi += 1) {
-    const current = queue[qi];
 
     for (const nextKey of adjacentKeys(current.key)) {
       const step = current.steps + 1;
@@ -1950,8 +1942,6 @@ function getLancerRouteMap(fromKey, unit) {
       const stateKey = `${nextKey}|${usedKill ? 1 : 0}|${defeatedKey || '-'}`;
 
       if (!friendlyOcc && (!routes.has(nextKey) || step > (routes.get(nextKey)?.path?.length || 0) - 1)) {
-      if (!friendlyOcc && (!routes.has(nextKey) || step > (routes.get(nextKey)?.path?.length || 0) - 1)) {
-
         routes.set(nextKey, { path, defeatedKey });
       }
 
@@ -1981,9 +1971,6 @@ function getSurveyorReach(fromKey, unit) {
 
   for (let qi = 0; qi < queue.length; qi += 1) {
     const current = queue[qi];
-  for (let qi = 0; qi < queue.length; qi += 1) {
-    const current = queue[qi];
-
 
     for (const nextKey of adjacentKeys(current.key)) {
       const step = current.steps + 1;
@@ -2905,10 +2892,6 @@ function render(logs = []) {
     const houses = new Set(['🏠', '🏡']);
     for (const tile of tiles) {
       const pos = tilePositionMap.get(keyOf(tile)) || axialToPixel(tile);
-    const houses = new Set(['🏠', '🏡']);
-    for (const tile of tiles) {
-      const pos = tilePositionMap.get(keyOf(tile)) || axialToPixel(tile);
-
       tile.symbols.forEach((symbol, i) => {
         const angle = (Math.PI / 180) * (60 * i - 30);
         const sx = pos.x + (HEX_RADIUS * 0.5) * Math.cos(angle);
