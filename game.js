@@ -868,11 +868,15 @@ function startGame(mode) {
   if (startInProgress) return;
   startInProgress = true;
 
-  if (start1pBtn) start1pBtn.disabled = true;
-  if (start2pBtn) start2pBtn.disabled = true;
-  if (startEasyAiBtn) startEasyAiBtn.disabled = true;
-  if (startMediumAiBtn) startMediumAiBtn.disabled = true;
-  if (startOnlineBtn) startOnlineBtn.disabled = true;
+  const setModeButtonsDisabled = (disabled) => {
+    if (start1pBtn) start1pBtn.disabled = disabled;
+    if (start2pBtn) start2pBtn.disabled = disabled;
+    if (startEasyAiBtn) startEasyAiBtn.disabled = disabled;
+    if (startMediumAiBtn) startMediumAiBtn.disabled = disabled;
+    if (startOnlineBtn) startOnlineBtn.disabled = disabled;
+  };
+
+  setModeButtonsDisabled(true);
   const easyCount = Math.max(1, Math.min(6, Number(aiEnemyCountEl?.value || 1)));
   const label = mode === 'solo'
     ? '1-player'
@@ -886,33 +890,42 @@ function startGame(mode) {
 
   // Let the menu hide paint first so startup work doesn't look like a frozen click.
   requestAnimationFrame(() => {
-  gameMode = mode;
-  currentPlayer = 'blue';
-  selectedKey = null;
-  lastDebug = mode === 'solo'
-    ? 'Solo mode: new tiles reveal as units approach them.'
-    : mode === 'easy-ai'
-      ? `Easy AI mode: ${easyCount} opponent${easyCount === 1 ? '' : 's'} controlled by heuristic AI.`
-      : mode === 'medium-ai'
-        ? `Medium AI mode: ${easyCount} opponent${easyCount === 1 ? '' : 's'} with expanded starting settlements.`
-        : '';
-  resourceFocus = null;
-  resourceHover = null;
-  applyPrimitivityIndex(primitivityIndexEl?.value || primitivityIndex);
-  applyMapSettings();
-  if (mode === 'solo') {
-    turnOrder = ['blue'];
-    setupSoloGame();
-  } else if (isAiGameMode(mode)) {
-    aiDifficulty = mode === 'medium-ai' ? 'medium' : 'easy';
-    setupAiGame(easyCount, aiDifficulty);
-  } else {
-    turnOrder = ['blue', 'red'];
-    setupDuoGame();
-  }
-  render();
-  renderAiTurnIndicator(null, []);
-  startInProgress = false;
+    try {
+      gameMode = mode;
+      currentPlayer = 'blue';
+      selectedKey = null;
+      lastDebug = mode === 'solo'
+        ? 'Solo mode: new tiles reveal as units approach them.'
+        : mode === 'easy-ai'
+          ? `Easy AI mode: ${easyCount} opponent${easyCount === 1 ? '' : 's'} controlled by heuristic AI.`
+          : mode === 'medium-ai'
+            ? `Medium AI mode: ${easyCount} opponent${easyCount === 1 ? '' : 's'} with expanded starting settlements.`
+            : '';
+      resourceFocus = null;
+      resourceHover = null;
+      applyPrimitivityIndex(primitivityIndexEl?.value || primitivityIndex);
+      applyMapSettings();
+      if (mode === 'solo') {
+        turnOrder = ['blue'];
+        setupSoloGame();
+      } else if (isAiGameMode(mode)) {
+        aiDifficulty = mode === 'medium-ai' ? 'medium' : 'easy';
+        setupAiGame(easyCount, aiDifficulty);
+      } else {
+        turnOrder = ['blue', 'red'];
+        setupDuoGame();
+      }
+      render();
+      renderAiTurnIndicator(null, []);
+    } catch (error) {
+      if (modeMenuEl) modeMenuEl.classList.remove('hidden');
+      lastDebug = `Start failed: ${error?.message || error}`;
+      if (statusText) statusText.textContent = `Failed to start ${label} game. See debug message.`;
+      render();
+    } finally {
+      setModeButtonsDisabled(false);
+      startInProgress = false;
+    }
   });
 }
 
@@ -1814,14 +1827,11 @@ function getRoadedInfantryWorkerDestinations(fromKey, unit) {
   const cls = UNIT_DEFS[unit.type]?.cls;
   const isWorkerLine = cls === 'worker' || unit.type === 'surveyor';
 
-<<<<<<< codex/create-simple-browser-based-hex-game-demo-eepx1w
   for (let qi = 0; qi < queue.length; qi += 1) {
     const current = queue[qi];
-=======
-  while (queue.length) {
-    const current = queue.shift();
-    if (!current) break;
->>>>>>> main
+  for (let qi = 0; qi < queue.length; qi += 1) {
+    const current = queue[qi];
+    
     for (const nextKey of adjacentKeys(current.key)) {
       const step = current.steps + 1;
       if (step > 2) continue;
@@ -1870,14 +1880,12 @@ function getCavalryDestinations(fromKey, unit) {
   const bestSteps = new Map([[fromKey, 0]]);
   const destinations = new Set();
 
-<<<<<<< codex/create-simple-browser-based-hex-game-demo-eepx1w
   for (let qi = 0; qi < queue.length; qi += 1) {
     const current = queue[qi];
-=======
-  while (queue.length) {
-    const current = queue.shift();
-    if (!current) break;
->>>>>>> main
+  for (let qi = 0; qi < queue.length; qi += 1) {
+    const current = queue[qi];
+
+    
 
     for (const nextKey of adjacentKeys(current.key)) {
       const step = current.steps + 1;
@@ -1919,14 +1927,10 @@ function getLancerRouteMap(fromKey, unit) {
   const seen = new Set([`${fromKey}|0`]);
   const routes = new Map();
 
-<<<<<<< codex/create-simple-browser-based-hex-game-demo-eepx1w
   for (let qi = 0; qi < queue.length; qi += 1) {
     const current = queue[qi];
-=======
-  while (queue.length) {
-    const current = queue.shift();
-    if (!current) break;
->>>>>>> main
+  for (let qi = 0; qi < queue.length; qi += 1) {
+    const current = queue[qi];
 
     for (const nextKey of adjacentKeys(current.key)) {
       const step = current.steps + 1;
@@ -1938,10 +1942,6 @@ function getLancerRouteMap(fromKey, unit) {
       const friendlyOcc = occ && occ.player === startPlayer;
       const hostileOcc = occ && occ.player !== startPlayer;
 
-<<<<<<< codex/create-simple-browser-based-hex-game-demo-eepx1w
-=======
-      if (friendlyOcc) continue;
->>>>>>> main
       if (hostileOcc && current.usedKill) continue;
 
       const usedKill = current.usedKill || hostileOcc;
@@ -1949,11 +1949,9 @@ function getLancerRouteMap(fromKey, unit) {
       const path = [...current.path, nextKey];
       const stateKey = `${nextKey}|${usedKill ? 1 : 0}|${defeatedKey || '-'}`;
 
-<<<<<<< codex/create-simple-browser-based-hex-game-demo-eepx1w
       if (!friendlyOcc && (!routes.has(nextKey) || step > (routes.get(nextKey)?.path?.length || 0) - 1)) {
-=======
-      if (!routes.has(nextKey) || step > (routes.get(nextKey)?.path?.length || 0) - 1) {
->>>>>>> main
+      if (!friendlyOcc && (!routes.has(nextKey) || step > (routes.get(nextKey)?.path?.length || 0) - 1)) {
+
         routes.set(nextKey, { path, defeatedKey });
       }
 
@@ -1981,14 +1979,11 @@ function getSurveyorReach(fromKey, unit) {
   const parent = new Map();
   const destinations = new Set();
 
-<<<<<<< codex/create-simple-browser-based-hex-game-demo-eepx1w
   for (let qi = 0; qi < queue.length; qi += 1) {
     const current = queue[qi];
-=======
-  while (queue.length) {
-    const current = queue.shift();
-    if (!current) break;
->>>>>>> main
+  for (let qi = 0; qi < queue.length; qi += 1) {
+    const current = queue[qi];
+
 
     for (const nextKey of adjacentKeys(current.key)) {
       const step = current.steps + 1;
@@ -2907,15 +2902,13 @@ function render(logs = []) {
     }
     terrainLayer.appendChild(mosaicGroup);
 
-<<<<<<< codex/create-simple-browser-based-hex-game-demo-eepx1w
     const houses = new Set(['🏠', '🏡']);
     for (const tile of tiles) {
       const pos = tilePositionMap.get(keyOf(tile)) || axialToPixel(tile);
-=======
+    const houses = new Set(['🏠', '🏡']);
     for (const tile of tiles) {
       const pos = tilePositionMap.get(keyOf(tile)) || axialToPixel(tile);
-      const houses = new Set(['🏠', '🏡']);
->>>>>>> main
+
       tile.symbols.forEach((symbol, i) => {
         const angle = (Math.PI / 180) * (60 * i - 30);
         const sx = pos.x + (HEX_RADIUS * 0.5) * Math.cos(angle);
