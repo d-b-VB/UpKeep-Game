@@ -2155,7 +2155,12 @@ function getMoveTargets(fromKey) {
   if (!unit) return [];
   if (unit.type === 'lancer') return [...getLancerRouteMap(fromKey, unit).keys()];
   if (isCavalry(unit.type)) return [...getCavalryDestinations(fromKey, unit)];
-  const base = tiles.map(keyOf).filter((toKey) => canMove(fromKey, toKey));
+
+  const from = getCellByKey(fromKey);
+  const base = DIRECTIONS
+    .map(([dq, dr]) => `${from.q + dq},${from.r + dr}`)
+    .filter((toKey) => cellKeys.has(toKey) && canMove(fromKey, toKey));
+
   const boosted = [...getRoadedInfantryWorkerDestinations(fromKey, unit)].filter((toKey) => canMove(fromKey, toKey));
   return [...new Set([...base, ...boosted])];
 }
@@ -2377,22 +2382,21 @@ function renderResources() {
   });
 
   resourcesEl.querySelectorAll('[data-resource-hover]').forEach((cell) => {
-    cell.addEventListener('mouseenter', () => {
-      resourceHover = { resource: cell.getAttribute('data-resource-hover'), mode: cell.getAttribute('data-resource-mode') };
+    const setHover = () => {
+      const nextHover = { resource: cell.getAttribute('data-resource-hover'), mode: cell.getAttribute('data-resource-mode') };
+      if (resourceHover?.resource === nextHover.resource && resourceHover?.mode === nextHover.mode) return;
+      resourceHover = nextHover;
       render();
-    });
-    cell.addEventListener('focus', () => {
-      resourceHover = { resource: cell.getAttribute('data-resource-hover'), mode: cell.getAttribute('data-resource-mode') };
-      render();
-    });
-    cell.addEventListener('mouseleave', () => {
+    };
+    const clearHover = () => {
+      if (!resourceHover) return;
       resourceHover = null;
       render();
-    });
-    cell.addEventListener('blur', () => {
-      resourceHover = null;
-      render();
-    });
+    };
+    cell.addEventListener('mouseenter', setHover);
+    cell.addEventListener('focus', setHover);
+    cell.addEventListener('mouseleave', clearHover);
+    cell.addEventListener('blur', clearHover);
   });
 
   resourcesEl.addEventListener('mouseleave', () => {
@@ -2743,27 +2747,35 @@ function buildTerrainLayerKey(tileSnapshot = tiles) {
   return tileSnapshot.map((tile) => `${tile.q},${tile.r}:${tile.type}:${tile.owner || '-'}:${(tile.symbols || []).join('')}`).join('|');
 }
 
+function buildClickLayerKey(tileSnapshot = tiles) {
+  return tileSnapshot.map((tile) => `${tile.q},${tile.r}`).join('|');
+}
+
 function ensureBoardLayers() {
   let terrainLayer = board.querySelector('#terrain-layer');
+  let inputLayer = board.querySelector('#input-layer');
   let overlayLayer = board.querySelector('#overlay-layer');
   let animationLayer = board.querySelector('#animation-layer');
 
-  if (!terrainLayer || !overlayLayer || !animationLayer) {
+  if (!terrainLayer || !inputLayer || !overlayLayer || !animationLayer) {
     board.innerHTML = '';
 
     terrainLayer = document.createElementNS('http://www.w3.org/2000/svg', 'g');
     terrainLayer.setAttribute('id', 'terrain-layer');
+    inputLayer = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+    inputLayer.setAttribute('id', 'input-layer');
     overlayLayer = document.createElementNS('http://www.w3.org/2000/svg', 'g');
     overlayLayer.setAttribute('id', 'overlay-layer');
     animationLayer = document.createElementNS('http://www.w3.org/2000/svg', 'g');
     animationLayer.setAttribute('id', 'animation-layer');
 
     board.appendChild(terrainLayer);
+    board.appendChild(inputLayer);
     board.appendChild(overlayLayer);
     board.appendChild(animationLayer);
   }
 
-  return { terrainLayer, overlayLayer, animationLayer };
+  return { terrainLayer, inputLayer, overlayLayer, animationLayer };
 }
 
 function renderUnitGlyph(unit, pos, group) {
@@ -2839,7 +2851,7 @@ function render(logs = []) {
     dynamicClosureCache.set(key, owner);
     return owner;
   };
-  const { terrainLayer, overlayLayer, animationLayer } = ensureBoardLayers();
+  const { terrainLayer, inputLayer, overlayLayer, animationLayer } = ensureBoardLayers();
 
   if (tileCenters.length) {
     const pad = HEX_RADIUS * 2.2;
@@ -2855,6 +2867,23 @@ function render(logs = []) {
 
   overlayLayer.innerHTML = '';
   animationLayer.innerHTML = '';
+
+  const clickLayerKey = buildClickLayerKey(tiles);
+  if (board.dataset.clickLayerKey !== clickLayerKey) {
+    inputLayer.innerHTML = '';
+    for (const tile of tiles) {
+      const key = keyOf(tile);
+      const pos = tilePositionMap.get(key) || axialToPixel(tile);
+      const clickableHex = document.createElementNS('http://www.w3.org/2000/svg', 'polygon');
+      clickableHex.setAttribute('class', 'hex');
+      clickableHex.setAttribute('points', polygonPoints(pos, HEX_RADIUS));
+      clickableHex.setAttribute('fill', 'transparent');
+      clickableHex.setAttribute('stroke', 'none');
+      clickableHex.dataset.key = key;
+      inputLayer.appendChild(clickableHex);
+    }
+    board.dataset.clickLayerKey = clickLayerKey;
+  }
 
   const terrainKey = buildTerrainLayerKey(tiles);
   if (board.dataset.terrainKey !== terrainKey) {
@@ -2919,14 +2948,6 @@ function render(logs = []) {
   for (const tile of tiles) {
     const key = keyOf(tile);
     const pos = tilePositionMap.get(key) || axialToPixel(tile);
-
-    const clickableHex = document.createElementNS('http://www.w3.org/2000/svg', 'polygon');
-    clickableHex.setAttribute('class', 'hex');
-    clickableHex.setAttribute('points', polygonPoints(pos, HEX_RADIUS));
-    clickableHex.setAttribute('fill', 'transparent');
-    clickableHex.setAttribute('stroke', 'none');
-    clickableHex.dataset.key = key;
-    overlayLayer.appendChild(clickableHex);
 
     if (focusedKeys) {
       const isFocus = focusedKeys.has(key);
