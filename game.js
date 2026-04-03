@@ -927,13 +927,13 @@ function startGame(mode) {
         turnOrder = ['blue', 'red'];
         setupDuoGame();
       }
-      render();
+      requestRender();
       renderAiTurnIndicator(null, []);
     } catch (error) {
       if (modeMenuEl) modeMenuEl.classList.remove('hidden');
       lastDebug = `Start failed: ${error?.message || error}`;
       if (statusText) statusText.textContent = `Failed to start ${label} game. See debug message.`;
-      render();
+      requestRender();
     } finally {
       setModeButtonsDisabled(false);
       startInProgress = false;
@@ -1278,7 +1278,7 @@ function wireDataChannel(channel) {
       currentPlayer = 'blue';
       selectedKey = null;
       setupDuoGame();
-      render();
+      requestRender();
       syncOnlineStateIfHost();
     } else {
       gameMode = 'online';
@@ -1943,24 +1943,26 @@ function getLancerRouteMap(fromKey, unit) {
       const step = current.steps + 1;
       if (step > maxSteps) continue;
 
-      if (isTileClosedFor(startPlayer, nextKey)) continue;
-
+      const nextClosed = isTileClosedFor(startPlayer, nextKey);
       const occ = unitAtKey(nextKey);
       const friendlyOcc = occ && occ.player === startPlayer;
       const hostileOcc = occ && occ.player !== startPlayer;
 
       if (hostileOcc && current.usedKill) continue;
 
+      const canPass = !nextClosed && !hostileOcc;
+      const canStop = !friendlyOcc;
+
       const usedKill = current.usedKill || hostileOcc;
       const defeatedKey = hostileOcc ? nextKey : current.defeatedKey;
       const path = [...current.path, nextKey];
       const stateKey = `${nextKey}|${usedKill ? 1 : 0}|${defeatedKey || '-'}`;
 
-      if (!friendlyOcc && (!routes.has(nextKey) || step > (routes.get(nextKey)?.path?.length || 0) - 1)) {
+      if (canStop && (!routes.has(nextKey) || step > (routes.get(nextKey)?.path?.length || 0) - 1)) {
         routes.set(nextKey, { path, defeatedKey });
       }
 
-      if (!seen.has(stateKey)) {
+      if (canPass && !seen.has(stateKey)) {
         seen.add(stateKey);
         queue.push({ key: nextKey, steps: step, usedKill, path, defeatedKey });
       }
@@ -2342,6 +2344,17 @@ function upgradeUnitAt(key, newType) {
   if (!suppressAutoRender) render();
 }
 
+function requestRender() {
+  const raf = (typeof window !== 'undefined' && window.requestAnimationFrame) ? window.requestAnimationFrame.bind(window) : ((cb) => setTimeout(cb, 0));
+  if (requestRender.pending) return;
+  requestRender.pending = true;
+  raf(() => {
+    requestRender.pending = false;
+    render();
+  });
+}
+requestRender.pending = false;
+
 function renderResources() {
   const eco = computeEconomy(currentPlayer);
   const activeFocus = resourceHover || resourceFocus;
@@ -2405,7 +2418,7 @@ function renderResources() {
       } else {
         resourceFocus = null;
       }
-      render();
+      requestRender();
     });
   });
 
@@ -2414,12 +2427,12 @@ function renderResources() {
       const nextHover = { resource: cell.getAttribute('data-resource-hover'), mode: cell.getAttribute('data-resource-mode') };
       if (resourceHover?.resource === nextHover.resource && resourceHover?.mode === nextHover.mode) return;
       resourceHover = nextHover;
-      render();
+      requestRender();
     };
     const clearHover = () => {
       if (!resourceHover) return;
       resourceHover = null;
-      render();
+      requestRender();
     };
     cell.addEventListener('mouseenter', setHover);
     cell.addEventListener('focus', setHover);
@@ -2767,7 +2780,7 @@ function renderRoyalKnightGlyph(pos) {
 }
 
 function buildTerrainLayerKey(tileSnapshot = tiles) {
-  return tileSnapshot.map((tile) => `${tile.q},${tile.r}:${tile.type}:${tile.owner || '-'}:${(tile.symbols || []).join('')}`).join('|');
+  return tileSnapshot.map((tile) => `${tile.q},${tile.r}:${tile.type}:${tile.owner || '-'}`).join('|');
 }
 
 function ensureBoardLayers() {
@@ -2870,10 +2883,20 @@ function render(logs = []) {
 
   if (tileCenters.length) {
     const pad = HEX_RADIUS * 2.2;
-    const minX = Math.min(...tileCenters.map((tc) => tc.pos.x - HEX_RADIUS)) - pad;
-    const maxX = Math.max(...tileCenters.map((tc) => tc.pos.x + HEX_RADIUS)) + pad;
-    const minY = Math.min(...tileCenters.map((tc) => tc.pos.y - HEX_RADIUS)) - pad;
-    const maxY = Math.max(...tileCenters.map((tc) => tc.pos.y + HEX_RADIUS)) + pad;
+    let minX = Infinity;
+    let maxX = -Infinity;
+    let minY = Infinity;
+    let maxY = -Infinity;
+    for (const tc of tileCenters) {
+      minX = Math.min(minX, tc.pos.x - HEX_RADIUS);
+      maxX = Math.max(maxX, tc.pos.x + HEX_RADIUS);
+      minY = Math.min(minY, tc.pos.y - HEX_RADIUS);
+      maxY = Math.max(maxY, tc.pos.y + HEX_RADIUS);
+    }
+    minX -= pad;
+    maxX += pad;
+    minY -= pad;
+    maxY += pad;
     boardViewMinX = Math.floor(minX);
     boardViewMinY = Math.floor(minY);
     boardBaseWidth = Math.max(800, Math.ceil(maxX - minX));
