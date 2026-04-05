@@ -146,6 +146,54 @@
     return cls === 'worker' || cls === 'defworker';
   }
 
+  function neighborsOfCell(cell) {
+    return [
+      `${cell.q + 1},${cell.r}`,
+      `${cell.q - 1},${cell.r}`,
+      `${cell.q},${cell.r + 1}`,
+      `${cell.q},${cell.r - 1}`,
+      `${cell.q + 1},${cell.r - 1}`,
+      `${cell.q - 1},${cell.r + 1}`,
+    ];
+  }
+
+  function enemyThreatContext(state) {
+    const me = state.currentPlayer || 'red';
+    const tiles = state.tiles || [];
+    const units = state.units || [];
+    const myUnits = units.filter((u) => u.player === me);
+    const enemyUnits = units.filter((u) => u.player !== me);
+    const tileMap = tileByKey(tiles);
+    const myCells = myUnits.map((u) => keyToCell(u.key));
+    const threatByKey = new Map();
+    const targetResourcePressure = { wood: 0, livestock: 0, crops: 0 };
+
+    for (const enemy of enemyUnits) {
+      const eCell = keyToCell(enemy.key);
+      const stats = enemy.aiStats || {};
+      const kills = Number(stats.kills || 0);
+      const captures = Number(stats.captures || 0);
+      const enemyCls = unitClass(state, enemy.type);
+      let border = false;
+      for (const nKey of neighborsOfCell(eCell)) {
+        const t = tileMap.get(nKey);
+        if (t && t.owner === me) {
+          border = true;
+          break;
+        }
+      }
+      const distToUs = myCells.length ? Math.min(...myCells.map((c) => cubeDistance(c, eCell))) : 6;
+      const score = 8 + (kills * 120) + (captures * 90) + (border ? 35 : 0) + Math.max(0, 12 - distToUs);
+      threatByKey.set(enemy.key, { score, kills, captures, border, type: enemy.type, cls: enemyCls, key: enemy.key });
+
+      if (enemyCls === 'cavalry') targetResourcePressure.crops += score;
+      if (enemy.type === 'spearman' || enemy.type === 'pikeman') targetResourcePressure.wood += score;
+      if (enemy.type === 'archer' || enemyCls === 'archer') targetResourcePressure.livestock += score;
+    }
+
+    return { threatByKey, targetResourcePressure };
+  }
+
   function strategicContext(state) {
     const me = state.currentPlayer || 'red';
     const opponent = 'blue';
@@ -292,7 +340,7 @@
       .sort((a, b) => b.score - a.score);
   }
 
-  function chooseTrainCandidates(state, targetResource, context) {
+  function chooseTrainCandidates(state, targetResource, context, threatCtx) {
     const trains = state.legalTrains || [];
     if (!trains.length) return [];
 
@@ -331,6 +379,12 @@
 
       if (!needWorkers && isSoldier && cls === soldierFocus) score += 10;
 
+      // Counter-training pressure (rough RPS): spears/pikes > cavalry, archers/swordsmen > spears/pikes, cavalry > archers.
+      const enemyPressure = threatCtx?.targetResourcePressure || {};
+      if (['spearman', 'pikeman'].includes(t.unitType)) score += (enemyPressure.crops || 0) * 0.06;
+      if (['swordsman', 'longbow', 'crossbow', 'hunter', 'barrage_captain'].includes(t.unitType)) score += (enemyPressure.wood || 0) * 0.06;
+      if (['horseman', 'lancer', 'cavalry_archer', 'royal_knight'].includes(t.unitType)) score += (enemyPressure.livestock || 0) * 0.06;
+
       // Build army if enemy is nearby or if wood is strong enough to support military production.
       if (isSoldier && (context?.frontlineThreat || 0) > 0) score += 10;
       if (isSoldier && (resourceAvail.wood || 0) > (resourceAvail.livestock || 0) + 2) score += 5;
@@ -346,20 +400,14 @@
     }).sort((a, b) => b.score - a.score);
   }
 
-  function scoreMove(unit, fromKey, toKey, state, targetResource, tileMap, unitMap, balancePlan, progressionGoal) {
+  function scoreMove(unit, fromKey, toKey, state, targetResource, tileMap, unitMap, balancePlan, progressionGoal, threatCtx) {
     const toTile = tileMap.get(toKey);
     const fromCell = keyToCell(fromKey);
     const toCell = keyToCell(toKey);
     const cls = unitClass(state, unit.type);
     const prod = state.productionByType?.[toTile?.type || ''];
-    const friendlyAdj = [
-      `${toCell.q + 1},${toCell.r}`,
-      `${toCell.q - 1},${toCell.r}`,
-      `${toCell.q},${toCell.r + 1}`,
-      `${toCell.q},${toCell.r - 1}`,
-      `${toCell.q + 1},${toCell.r - 1}`,
-      `${toCell.q - 1},${toCell.r + 1}`,
-    ].filter((k) => {
+    const adjacent = neighborsOfCell(toCell);
+    const friendlyAdj = adjacent.filter((k) => {
       const u = unitMap.get(k);
       return u && u.player === unit.player;
     }).length;
@@ -388,6 +436,35 @@
 
     // stay grouped
     score += friendlyAdj * 2.5;
+    if (unit.type === 'spearman' || unit.type === 'pikeman') score += friendlyAdj * 3.2;
+
+    let directEnemyAdj = 0;
+    let archerThreat = 0;
+    let attackReady = 0;
+    for (const enemy of state.units || []) {
+      if (enemy.player === unit.player) continue;
+      const eCell = keyToCell(enemy.key);
+      const d = cubeDistance(toCell, eCell);
+      const enemyCls = unitClass(state, enemy.type);
+      const threat = threatCtx?.threatByKey?.get(enemy.key)?.score || 0;
+      if (d <= 1) {
+        directEnemyAdj += 1;
+        attackReady += 1 + threat * 0.02;
+      }
+      if (enemyCls === 'archer' && d <= 2) archerThreat += 1 + threat * 0.015;
+    }
+    score -= directEnemyAdj * 8;
+    score -= archerThreat * 5;
+    score += attackReady * 5;
+
+    if (!isWorker && threatCtx?.threatByKey?.size) {
+      let bestThreatProximity = 0;
+      for (const t of threatCtx.threatByKey.values()) {
+        const d = cubeDistance(toCell, keyToCell(t.key));
+        bestThreatProximity = Math.max(bestThreatProximity, (t.score * 0.08) - d * 2);
+      }
+      score += bestThreatProximity;
+    }
 
     const closed = Boolean(toTile && state.closedTiles?.[toKey]);
     if ((cls === 'cavalry' || isLongWeapon(unit.type)) && closed) score -= 8;
@@ -398,7 +475,7 @@
     return score;
   }
 
-  function chooseMoveCandidates(state, targetResource, balancePlan, progressionGoal) {
+  function chooseMoveCandidates(state, targetResource, balancePlan, progressionGoal, threatCtx) {
     const tileMap = tileByKey(state.tiles || []);
     const unitMap = unitByKey(state.units || []);
     const out = [];
@@ -407,7 +484,7 @@
       if (unit.player !== state.currentPlayer) continue;
       const moves = state.legalMovesByUnit?.[unit.key] || [];
       for (const toKey of moves) {
-        const score = scoreMove(unit, unit.key, toKey, state, targetResource, tileMap, unitMap, balancePlan, progressionGoal);
+        const score = scoreMove(unit, unit.key, toKey, state, targetResource, tileMap, unitMap, balancePlan, progressionGoal, threatCtx);
         out.push({ type: 'move', from: unit.key, to: toKey, score });
       }
     }
@@ -415,12 +492,15 @@
     return out.sort((a, b) => b.score - a.score);
   }
 
-  function chooseShotCandidates(state) {
+  function chooseShotCandidates(state, threatCtx) {
     const out = [];
     for (const unit of state.units || []) {
       if (unit.player !== state.currentPlayer) continue;
       const shots = state.legalShotsByUnit?.[unit.key] || [];
-      for (const to of shots) out.push({ type: 'shoot', from: unit.key, to, score: 1 + Math.random() });
+      for (const to of shots) {
+        const threat = threatCtx?.threatByKey?.get(to)?.score || 0;
+        out.push({ type: 'shoot', from: unit.key, to, score: 1 + (threat * 0.12) + Math.random() });
+      }
     }
     return out.sort((a, b) => b.score - a.score);
   }
@@ -646,11 +726,15 @@
     const balancePlan = buildResourceBalancePlan(state);
     const progressionGoal = buildAggressiveProgressionGoal(state);
     const context = strategicContext(state);
+    const threatCtx = enemyThreatContext(state);
+    if (threatCtx.targetResourcePressure.wood > 10) progressionGoal.resourceGoals.push('wood');
+    if (threatCtx.targetResourcePressure.livestock > 10) progressionGoal.resourceGoals.push('livestock');
+    if (threatCtx.targetResourcePressure.crops > 10) progressionGoal.resourceGoals.push('crops');
 
-    let trains = chooseTrainCandidates(state, targetResource, context);
-    let moves = chooseMoveCandidates(state, targetResource, balancePlan, progressionGoal);
+    let trains = chooseTrainCandidates(state, targetResource, context, threatCtx);
+    let moves = chooseMoveCandidates(state, targetResource, balancePlan, progressionGoal, threatCtx);
     let upgrades = chooseUpgradeCandidates(state, targetResource, balancePlan, context, progressionGoal);
-    let shots = chooseShotCandidates(state);
+    let shots = chooseShotCandidates(state, threatCtx);
 
     const workerEval = buildWorkerOptionBoosts(state, targetResource);
     const workerBoosts = workerEval.boosts || new Map();

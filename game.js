@@ -692,8 +692,12 @@ let turnOrder = ['blue', 'red'];
 let startInProgress = false;
 let aiDifficulty = 'easy';
 let economyRevision = 1;
+let cellTopologyRevision = 1;
 const economyCache = new Map();
 const resourceContributorCache = new Map();
+const adjacentKeyCache = new Map();
+const tileByKeyCache = new Map();
+const parsedCellCache = new Map();
 
 function invalidateEconomyCaches() {
   economyRevision += 1;
@@ -701,8 +705,18 @@ function invalidateEconomyCaches() {
   resourceContributorCache.clear();
 }
 
+function rebuildTileByKeyCache() {
+  tileByKeyCache.clear();
+  for (const t of tiles) tileByKeyCache.set(keyOf(t), t);
+}
+
 function isLiveEconomyState(tileSnapshot = tiles, unitSnapshot = units) {
   return tileSnapshot === tiles && unitSnapshot === units;
+}
+
+function invalidateCellTopologyCache() {
+  cellTopologyRevision += 1;
+  adjacentKeyCache.clear();
 }
 
 function makeTile(cell) {
@@ -715,7 +729,10 @@ function addCellTile(cell) {
   if (cellKeys.has(key)) return;
   cells.push(cell);
   cellKeys.add(key);
-  tiles.push(makeTile(cell));
+  const t = makeTile(cell);
+  tiles.push(t);
+  tileByKeyCache.set(key, t);
+  invalidateCellTopologyCache();
 }
 
 function withinFiniteMap(cell) {
@@ -800,7 +817,9 @@ function computeEvenAiStarts(center, ringDistance, count) {
 function setupDuoGame() {
   cells = buildRadiusCells(mapRadius);
   cellKeys = new Set(cells.map(keyOf));
+  invalidateCellTopologyCache();
   tiles = cells.map((cell) => makeTile(cell));
+  rebuildTileByKeyCache();
   units = new Map();
   invalidateEconomyCaches();
   placeStart(-mapRadius, mapRadius, 'blue');
@@ -812,7 +831,9 @@ function setupDuoGame() {
 function setupAiGame(enemyCount = 1, difficulty = 'easy') {
   cells = buildRadiusCells(soloStartRadius);
   cellKeys = new Set(cells.map(keyOf));
+  invalidateCellTopologyCache();
   tiles = cells.map((cell) => makeTile(cell));
+  rebuildTileByKeyCache();
   units = new Map();
   invalidateEconomyCaches();
 
@@ -856,7 +877,9 @@ function revealExpandingTiles() {
 function setupSoloGame() {
   cells = buildRadiusCells(soloStartRadius);
   cellKeys = new Set(cells.map(keyOf));
+  invalidateCellTopologyCache();
   tiles = cells.map((cell) => makeTile(cell));
+  rebuildTileByKeyCache();
   units = new Map();
   invalidateEconomyCaches();
   placeStart(0, 0, 'blue');
@@ -916,13 +939,13 @@ function startGame(mode) {
         turnOrder = ['blue', 'red'];
         setupDuoGame();
       }
-      render();
+      requestRender();
       renderAiTurnIndicator(null, []);
     } catch (error) {
       if (modeMenuEl) modeMenuEl.classList.remove('hidden');
       lastDebug = `Start failed: ${error?.message || error}`;
       if (statusText) statusText.textContent = `Failed to start ${label} game. See debug message.`;
-      render();
+      requestRender();
     } finally {
       setModeButtonsDisabled(false);
       startInProgress = false;
@@ -962,7 +985,11 @@ function buildEasyAiState() {
     currentPlayer,
     cells: cells.map((c) => ({ ...c })),
     tiles: tiles.map((t) => ({ ...t, key: keyOf(t) })),
-    units: [...units.entries()].map(([key, unit]) => ({ key, ...unit })),
+    units: [...units.entries()].map(([key, unit]) => ({
+      key,
+      ...unit,
+      aiStats: { ...(unit.aiStats || {}) },
+    })),
     legalMovesByUnit: Object.fromEntries(
       [...units.entries()]
         .filter(([, unit]) => unit.player === currentPlayer)
@@ -1198,12 +1225,15 @@ function applySerializedState(payload) {
   currentPlayer = payload.currentPlayer || 'blue';
   cells = (payload.cells || []).map((c) => ({ ...c }));
   cellKeys = new Set(cells.map(keyOf));
+  invalidateCellTopologyCache();
   tiles = (payload.tiles || []).map((t) => ({ ...t }));
+  rebuildTileByKeyCache();
   units = new Map((payload.units || []).map((u) => [u.key, {
     player: u.player,
     type: u.type,
     movesLeft: u.movesLeft,
     actionsLeft: u.actionsLeft,
+    aiStats: { ...(u.aiStats || {}) },
   }]));
   invalidateEconomyCaches();
   selectedKey = null;
@@ -1266,7 +1296,7 @@ function wireDataChannel(channel) {
       currentPlayer = 'blue';
       selectedKey = null;
       setupDuoGame();
-      render();
+      requestRender();
       syncOnlineStateIfHost();
     } else {
       gameMode = 'online';
@@ -1423,8 +1453,19 @@ function tickAnimations() {
   animationFrameHandle = requestAnimationFrame(step);
 }
 
-function getTile(key) { return tiles.find((t) => keyOf(t) === key); }
-function getCellByKey(key) { const [q, r] = key.split(',').map(Number); return { q, r }; }
+function getTile(key) {
+  if (tileByKeyCache.has(key)) return tileByKeyCache.get(key);
+  const found = tiles.find((t) => keyOf(t) === key);
+  if (found) tileByKeyCache.set(key, found);
+  return found;
+}
+function getCellByKey(key) {
+  if (parsedCellCache.has(key)) return parsedCellCache.get(key);
+  const [q, r] = key.split(',').map(Number);
+  const cell = { q, r };
+  parsedCellCache.set(key, cell);
+  return cell;
+}
 function isAdjacent(a, b) { return DIRECTIONS.some(([dq, dr]) => a.q + dq === b.q && a.r + dr === b.r); }
 
 
@@ -1665,6 +1706,13 @@ function isDirectCaptureMilitary(unitType) {
   return !['axman', 'worker', 'laborer', 'architect', 'rangehand', 'surveyor', 'constable'].includes(unitType);
 }
 
+function markUnitAggression(unit, kind, amount = 1) {
+  if (!unit) return;
+  if (!unit.aiStats) unit.aiStats = { kills: 0, captures: 0 };
+  if (kind === 'kill') unit.aiStats.kills = Number(unit.aiStats.kills || 0) + amount;
+  if (kind === 'capture') unit.aiStats.captures = Number(unit.aiStats.captures || 0) + amount;
+}
+
 function applyTileControlAfterMove(tile, moverPlayer, moverType, tileSnapshot = tiles, unitSnapshot = units) {
   const wasEnemy = Boolean(tile.owner) && tile.owner !== moverPlayer;
   const upkeepRequired = Boolean(structureUpkeep[tile.type]);
@@ -1680,12 +1728,12 @@ function applyTileControlAfterMove(tile, moverPlayer, moverType, tileSnapshot = 
 
   if (!upkeepRequired) {
     tile.owner = moverPlayer;
-    return { claimText: wasEnemy ? 'captured enemy territory' : 'claimed neutral tile' };
+    return { claimText: wasEnemy ? 'captured enemy territory' : 'claimed neutral tile', capturedEnemyTerritory: wasEnemy };
   }
 
   if (canClaimUpkeepTileNow(moverPlayer, tile.type, tileSnapshot, unitSnapshot)) {
     tile.owner = moverPlayer;
-    return { claimText: wasEnemy ? 'captured enemy territory' : 'claimed neutral tile' };
+    return { claimText: wasEnemy ? 'captured enemy territory' : 'claimed neutral tile', capturedEnemyTerritory: wasEnemy };
   }
 
   tile.owner = null;
@@ -1693,6 +1741,7 @@ function applyTileControlAfterMove(tile, moverPlayer, moverType, tileSnapshot = 
     claimText: wasEnemy
       ? `contested enemy tile and left it neutral (insufficient ${tile.type} upkeep stream)`
       : 'stood on neutral tile without claiming (insufficient upkeep stream)',
+    capturedEnemyTerritory: false,
   };
 }
 
@@ -1701,10 +1750,13 @@ function unitAtKey(key) {
 }
 
 function adjacentKeys(key) {
+  if (adjacentKeyCache.has(key)) return adjacentKeyCache.get(key);
   const c = getCellByKey(key);
-  return DIRECTIONS
+  const out = DIRECTIONS
     .map(([dq, dr]) => `${c.q + dq},${c.r + dr}`)
     .filter((k) => cellKeys.has(k));
+  adjacentKeyCache.set(key, out);
+  return out;
 }
 
 function terrainClosedForPlayer(tile, player) {
@@ -1928,24 +1980,26 @@ function getLancerRouteMap(fromKey, unit) {
       const step = current.steps + 1;
       if (step > maxSteps) continue;
 
-      if (isTileClosedFor(startPlayer, nextKey)) continue;
-
+      const nextClosed = isTileClosedFor(startPlayer, nextKey);
       const occ = unitAtKey(nextKey);
       const friendlyOcc = occ && occ.player === startPlayer;
       const hostileOcc = occ && occ.player !== startPlayer;
 
       if (hostileOcc && current.usedKill) continue;
 
+      const canPass = !nextClosed && !hostileOcc;
+      const canStop = !friendlyOcc;
+
       const usedKill = current.usedKill || hostileOcc;
       const defeatedKey = hostileOcc ? nextKey : current.defeatedKey;
       const path = [...current.path, nextKey];
       const stateKey = `${nextKey}|${usedKill ? 1 : 0}|${defeatedKey || '-'}`;
 
-      if (!friendlyOcc && (!routes.has(nextKey) || step > (routes.get(nextKey)?.path?.length || 0) - 1)) {
+      if (canStop && (!routes.has(nextKey) || step > (routes.get(nextKey)?.path?.length || 0) - 1)) {
         routes.set(nextKey, { path, defeatedKey });
       }
 
-      if (!seen.has(stateKey)) {
+      if (canPass && !seen.has(stateKey)) {
         seen.add(stateKey);
         queue.push({ key: nextKey, steps: step, usedKill, path, defeatedKey });
       }
@@ -2113,7 +2167,20 @@ function canRangedAttack(fromKey, toKey) {
 }
 
 function getAttackTargets(fromKey) {
-  return cells.map(keyOf).filter((toKey) => canRangedAttack(fromKey, toKey));
+  const attacker = units.get(fromKey);
+  if (!attacker || !isArcher(attacker.type) || attacker.actionsLeft <= 0) return [];
+
+  const from = getCellByKey(fromKey);
+  const range = archerRange(attacker.type);
+  const candidates = new Set();
+  for (let dq = -range; dq <= range; dq += 1) {
+    for (let dr = Math.max(-range, -dq - range); dr <= Math.min(range, -dq + range); dr += 1) {
+      if (dq === 0 && dr === 0) continue;
+      const key = `${from.q + dq},${from.r + dr}`;
+      if (cellKeys.has(key)) candidates.add(key);
+    }
+  }
+  return [...candidates].filter((toKey) => canRangedAttack(fromKey, toKey));
 }
 
 function explainAttackFailure(fromKey, toKey) {
@@ -2145,6 +2212,7 @@ function rangedAttack(fromKey, toKey) {
   if (!attacker || !target) return false;
   startShotAnimation(fromKey, toKey, attacker.player);
   units.delete(toKey);
+  markUnitAggression(attacker, 'kill');
   attacker.actionsLeft -= 1;
   lastDebug = `Attack ok: ${attacker.type} shot ${target.type} at ${toKey}.`;
   return true;
@@ -2221,13 +2289,20 @@ function moveUnit(fromKey, toKey) {
   // Movement never blocked by economy; shortages resolve on turn rollover.
   unit.movesLeft = nextMoves;
   if (defeated && ['crossbow', 'barrage_captain'].includes(unit.type)) unit.actionsLeft = Math.max(0, unit.actionsLeft - 1);
-  if (passThroughDefeat) units.delete(passThroughDefeat);
+  let killCount = 0;
+  if (passThroughDefeat) {
+    units.delete(passThroughDefeat);
+    killCount += 1;
+  }
   units.set(toKey, unit);
   units.delete(fromKey);
+  if (defeated) killCount += 1;
+  if (killCount > 0) markUnitAggression(unit, 'kill', killCount);
   invalidateEconomyCaches();
   startMoveAnimation(fromKey, toKey, unit);
 
-  const { claimText } = applyTileControlAfterMove(destTile, currentPlayer, unit.type, tiles, units);
+  const { claimText, capturedEnemyTerritory } = applyTileControlAfterMove(destTile, currentPlayer, unit.type, tiles, units);
+  if (capturedEnemyTerritory) markUnitAggression(unit, 'capture');
   invalidateEconomyCaches();
   const lancerKillText = passThroughDefeat ? ` pass-through eliminated enemy at ${passThroughDefeat}.` : '';
 
@@ -2314,6 +2389,17 @@ function upgradeUnitAt(key, newType) {
   if (!suppressAutoRender) render();
 }
 
+function requestRender() {
+  const raf = (typeof window !== 'undefined' && window.requestAnimationFrame) ? window.requestAnimationFrame.bind(window) : ((cb) => setTimeout(cb, 0));
+  if (requestRender.pending) return;
+  requestRender.pending = true;
+  raf(() => {
+    requestRender.pending = false;
+    render();
+  });
+}
+requestRender.pending = false;
+
 function renderResources() {
   const eco = computeEconomy(currentPlayer);
   const activeFocus = resourceHover || resourceFocus;
@@ -2377,7 +2463,7 @@ function renderResources() {
       } else {
         resourceFocus = null;
       }
-      render();
+      requestRender();
     });
   });
 
@@ -2386,12 +2472,12 @@ function renderResources() {
       const nextHover = { resource: cell.getAttribute('data-resource-hover'), mode: cell.getAttribute('data-resource-mode') };
       if (resourceHover?.resource === nextHover.resource && resourceHover?.mode === nextHover.mode) return;
       resourceHover = nextHover;
-      render();
+      requestRender();
     };
     const clearHover = () => {
       if (!resourceHover) return;
       resourceHover = null;
-      render();
+      requestRender();
     };
     cell.addEventListener('mouseenter', setHover);
     cell.addEventListener('focus', setHover);
@@ -2399,11 +2485,6 @@ function renderResources() {
     cell.addEventListener('blur', clearHover);
   });
 
-  resourcesEl.addEventListener('mouseleave', () => {
-    if (!resourceHover) return;
-    resourceHover = null;
-    render();
-  }, { once: true });
 }
 
 
@@ -2744,11 +2825,7 @@ function renderRoyalKnightGlyph(pos) {
 }
 
 function buildTerrainLayerKey(tileSnapshot = tiles) {
-  return tileSnapshot.map((tile) => `${tile.q},${tile.r}:${tile.type}:${tile.owner || '-'}:${(tile.symbols || []).join('')}`).join('|');
-}
-
-function buildClickLayerKey(tileSnapshot = tiles) {
-  return tileSnapshot.map((tile) => `${tile.q},${tile.r}`).join('|');
+  return tileSnapshot.map((tile) => `${tile.q},${tile.r}:${tile.type}:${tile.owner || '-'}`).join('|');
 }
 
 function ensureBoardLayers() {
@@ -2826,10 +2903,6 @@ function renderUnitGlyph(unit, pos, group) {
 
 function render(logs = []) {
   revealExpandingTiles();
-  if (resourceHover) {
-    const hoveredCell = document.querySelector('[data-resource-hover]:hover');
-    if (!hoveredCell) resourceHover = null;
-  }
   applyBoardZoom();
   const targets = selectedKey ? new Set(getTargets(selectedKey)) : new Set();
   const prodCtx = buildProductionContext(tiles);
@@ -2855,10 +2928,20 @@ function render(logs = []) {
 
   if (tileCenters.length) {
     const pad = HEX_RADIUS * 2.2;
-    const minX = Math.min(...tileCenters.map((tc) => tc.pos.x - HEX_RADIUS)) - pad;
-    const maxX = Math.max(...tileCenters.map((tc) => tc.pos.x + HEX_RADIUS)) + pad;
-    const minY = Math.min(...tileCenters.map((tc) => tc.pos.y - HEX_RADIUS)) - pad;
-    const maxY = Math.max(...tileCenters.map((tc) => tc.pos.y + HEX_RADIUS)) + pad;
+    let minX = Infinity;
+    let maxX = -Infinity;
+    let minY = Infinity;
+    let maxY = -Infinity;
+    for (const tc of tileCenters) {
+      minX = Math.min(minX, tc.pos.x - HEX_RADIUS);
+      maxX = Math.max(maxX, tc.pos.x + HEX_RADIUS);
+      minY = Math.min(minY, tc.pos.y - HEX_RADIUS);
+      maxY = Math.max(maxY, tc.pos.y + HEX_RADIUS);
+    }
+    minX -= pad;
+    maxX += pad;
+    minY -= pad;
+    maxY += pad;
     boardViewMinX = Math.floor(minX);
     boardViewMinY = Math.floor(minY);
     boardBaseWidth = Math.max(800, Math.ceil(maxX - minX));
@@ -2868,7 +2951,7 @@ function render(logs = []) {
   overlayLayer.innerHTML = '';
   animationLayer.innerHTML = '';
 
-  const clickLayerKey = buildClickLayerKey(tiles);
+  const clickLayerKey = String(cellTopologyRevision);
   if (board.dataset.clickLayerKey !== clickLayerKey) {
     inputLayer.innerHTML = '';
     for (const tile of tiles) {
