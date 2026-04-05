@@ -696,11 +696,18 @@ let cellTopologyRevision = 1;
 const economyCache = new Map();
 const resourceContributorCache = new Map();
 const adjacentKeyCache = new Map();
+const tileByKeyCache = new Map();
+const parsedCellCache = new Map();
 
 function invalidateEconomyCaches() {
   economyRevision += 1;
   economyCache.clear();
   resourceContributorCache.clear();
+}
+
+function rebuildTileByKeyCache() {
+  tileByKeyCache.clear();
+  for (const t of tiles) tileByKeyCache.set(keyOf(t), t);
 }
 
 function isLiveEconomyState(tileSnapshot = tiles, unitSnapshot = units) {
@@ -722,7 +729,9 @@ function addCellTile(cell) {
   if (cellKeys.has(key)) return;
   cells.push(cell);
   cellKeys.add(key);
-  tiles.push(makeTile(cell));
+  const t = makeTile(cell);
+  tiles.push(t);
+  tileByKeyCache.set(key, t);
   invalidateCellTopologyCache();
 }
 
@@ -810,6 +819,7 @@ function setupDuoGame() {
   cellKeys = new Set(cells.map(keyOf));
   invalidateCellTopologyCache();
   tiles = cells.map((cell) => makeTile(cell));
+  rebuildTileByKeyCache();
   units = new Map();
   invalidateEconomyCaches();
   placeStart(-mapRadius, mapRadius, 'blue');
@@ -823,6 +833,7 @@ function setupAiGame(enemyCount = 1, difficulty = 'easy') {
   cellKeys = new Set(cells.map(keyOf));
   invalidateCellTopologyCache();
   tiles = cells.map((cell) => makeTile(cell));
+  rebuildTileByKeyCache();
   units = new Map();
   invalidateEconomyCaches();
 
@@ -868,6 +879,7 @@ function setupSoloGame() {
   cellKeys = new Set(cells.map(keyOf));
   invalidateCellTopologyCache();
   tiles = cells.map((cell) => makeTile(cell));
+  rebuildTileByKeyCache();
   units = new Map();
   invalidateEconomyCaches();
   placeStart(0, 0, 'blue');
@@ -973,7 +985,11 @@ function buildEasyAiState() {
     currentPlayer,
     cells: cells.map((c) => ({ ...c })),
     tiles: tiles.map((t) => ({ ...t, key: keyOf(t) })),
-    units: [...units.entries()].map(([key, unit]) => ({ key, ...unit })),
+    units: [...units.entries()].map(([key, unit]) => ({
+      key,
+      ...unit,
+      aiStats: { ...(unit.aiStats || {}) },
+    })),
     legalMovesByUnit: Object.fromEntries(
       [...units.entries()]
         .filter(([, unit]) => unit.player === currentPlayer)
@@ -1211,11 +1227,13 @@ function applySerializedState(payload) {
   cellKeys = new Set(cells.map(keyOf));
   invalidateCellTopologyCache();
   tiles = (payload.tiles || []).map((t) => ({ ...t }));
+  rebuildTileByKeyCache();
   units = new Map((payload.units || []).map((u) => [u.key, {
     player: u.player,
     type: u.type,
     movesLeft: u.movesLeft,
     actionsLeft: u.actionsLeft,
+    aiStats: { ...(u.aiStats || {}) },
   }]));
   invalidateEconomyCaches();
   selectedKey = null;
@@ -1435,8 +1453,19 @@ function tickAnimations() {
   animationFrameHandle = requestAnimationFrame(step);
 }
 
-function getTile(key) { return tiles.find((t) => keyOf(t) === key); }
-function getCellByKey(key) { const [q, r] = key.split(',').map(Number); return { q, r }; }
+function getTile(key) {
+  if (tileByKeyCache.has(key)) return tileByKeyCache.get(key);
+  const found = tiles.find((t) => keyOf(t) === key);
+  if (found) tileByKeyCache.set(key, found);
+  return found;
+}
+function getCellByKey(key) {
+  if (parsedCellCache.has(key)) return parsedCellCache.get(key);
+  const [q, r] = key.split(',').map(Number);
+  const cell = { q, r };
+  parsedCellCache.set(key, cell);
+  return cell;
+}
 function isAdjacent(a, b) { return DIRECTIONS.some(([dq, dr]) => a.q + dq === b.q && a.r + dr === b.r); }
 
 
@@ -1677,6 +1706,13 @@ function isDirectCaptureMilitary(unitType) {
   return !['axman', 'worker', 'laborer', 'architect', 'rangehand', 'surveyor', 'constable'].includes(unitType);
 }
 
+function markUnitAggression(unit, kind, amount = 1) {
+  if (!unit) return;
+  if (!unit.aiStats) unit.aiStats = { kills: 0, captures: 0 };
+  if (kind === 'kill') unit.aiStats.kills = Number(unit.aiStats.kills || 0) + amount;
+  if (kind === 'capture') unit.aiStats.captures = Number(unit.aiStats.captures || 0) + amount;
+}
+
 function applyTileControlAfterMove(tile, moverPlayer, moverType, tileSnapshot = tiles, unitSnapshot = units) {
   const wasEnemy = Boolean(tile.owner) && tile.owner !== moverPlayer;
   const upkeepRequired = Boolean(structureUpkeep[tile.type]);
@@ -1692,12 +1728,12 @@ function applyTileControlAfterMove(tile, moverPlayer, moverType, tileSnapshot = 
 
   if (!upkeepRequired) {
     tile.owner = moverPlayer;
-    return { claimText: wasEnemy ? 'captured enemy territory' : 'claimed neutral tile' };
+    return { claimText: wasEnemy ? 'captured enemy territory' : 'claimed neutral tile', capturedEnemyTerritory: wasEnemy };
   }
 
   if (canClaimUpkeepTileNow(moverPlayer, tile.type, tileSnapshot, unitSnapshot)) {
     tile.owner = moverPlayer;
-    return { claimText: wasEnemy ? 'captured enemy territory' : 'claimed neutral tile' };
+    return { claimText: wasEnemy ? 'captured enemy territory' : 'claimed neutral tile', capturedEnemyTerritory: wasEnemy };
   }
 
   tile.owner = null;
@@ -1705,6 +1741,7 @@ function applyTileControlAfterMove(tile, moverPlayer, moverType, tileSnapshot = 
     claimText: wasEnemy
       ? `contested enemy tile and left it neutral (insufficient ${tile.type} upkeep stream)`
       : 'stood on neutral tile without claiming (insufficient upkeep stream)',
+    capturedEnemyTerritory: false,
   };
 }
 
@@ -2175,6 +2212,7 @@ function rangedAttack(fromKey, toKey) {
   if (!attacker || !target) return false;
   startShotAnimation(fromKey, toKey, attacker.player);
   units.delete(toKey);
+  markUnitAggression(attacker, 'kill');
   attacker.actionsLeft -= 1;
   lastDebug = `Attack ok: ${attacker.type} shot ${target.type} at ${toKey}.`;
   return true;
@@ -2251,13 +2289,20 @@ function moveUnit(fromKey, toKey) {
   // Movement never blocked by economy; shortages resolve on turn rollover.
   unit.movesLeft = nextMoves;
   if (defeated && ['crossbow', 'barrage_captain'].includes(unit.type)) unit.actionsLeft = Math.max(0, unit.actionsLeft - 1);
-  if (passThroughDefeat) units.delete(passThroughDefeat);
+  let killCount = 0;
+  if (passThroughDefeat) {
+    units.delete(passThroughDefeat);
+    killCount += 1;
+  }
   units.set(toKey, unit);
   units.delete(fromKey);
+  if (defeated) killCount += 1;
+  if (killCount > 0) markUnitAggression(unit, 'kill', killCount);
   invalidateEconomyCaches();
   startMoveAnimation(fromKey, toKey, unit);
 
-  const { claimText } = applyTileControlAfterMove(destTile, currentPlayer, unit.type, tiles, units);
+  const { claimText, capturedEnemyTerritory } = applyTileControlAfterMove(destTile, currentPlayer, unit.type, tiles, units);
+  if (capturedEnemyTerritory) markUnitAggression(unit, 'capture');
   invalidateEconomyCaches();
   const lancerKillText = passThroughDefeat ? ` pass-through eliminated enemy at ${passThroughDefeat}.` : '';
 
