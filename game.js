@@ -1923,6 +1923,52 @@ function getRoadedInfantryWorkerDestinations(fromKey, unit) {
   return out;
 }
 
+function getArcherAdvanceDestinations(fromKey, unit) {
+  if (!isArcher(unit.type) || unit.type === 'cavalry_archer') return new Set();
+  if (unit.movesLeft <= 0) return new Set();
+
+  const out = new Set();
+  const fromCell = getCellByKey(fromKey);
+  const range = archerRange(unit.type);
+
+  const baselineThreats = new Set();
+  for (const [k, other] of units.entries()) {
+    if (other.player === unit.player) continue;
+    if (cubeDistance(fromCell, getCellByKey(k)) <= range) baselineThreats.add(k);
+  }
+
+  for (const stepOneKey of adjacentKeys(fromKey)) {
+    const stepOneTile = getTile(stepOneKey);
+    const stepOneOcc = unitAtKey(stepOneKey);
+    if (!stepOneTile) continue;
+    if (stepOneOcc && stepOneOcc.player !== unit.player) continue;
+    if (stepOneTile.owner !== unit.player) continue;
+    if (isTileClosedFor(unit.player, stepOneKey)) continue;
+
+    for (const stepTwoKey of adjacentKeys(stepOneKey)) {
+      if (stepTwoKey === fromKey) continue;
+      const stepTwoTile = getTile(stepTwoKey);
+      if (!stepTwoTile) continue;
+      if (stepTwoTile.owner !== unit.player) continue;
+      if (isTileClosedFor(unit.player, stepTwoKey)) continue;
+
+      const toCell = getCellByKey(stepTwoKey);
+      let introducesNewThreat = false;
+      for (const [enemyKey, other] of units.entries()) {
+        if (other.player === unit.player) continue;
+        if (cubeDistance(toCell, getCellByKey(enemyKey)) <= range && !baselineThreats.has(enemyKey)) {
+          introducesNewThreat = true;
+          break;
+        }
+      }
+      if (!introducesNewThreat) out.add(stepTwoKey);
+    }
+  }
+
+  out.delete(fromKey);
+  return out;
+}
+
 function getCavalryDestinations(fromKey, unit) {
   const maxSteps = Math.max(1, unit.movesLeft);
   const startPlayer = unit.player;
@@ -2084,10 +2130,11 @@ function explainMoveFailure(fromKey, toKey) {
   } else {
     const from = getCellByKey(fromKey);
     const to = getCellByKey(toKey);
-    const boostedTargets = getRoadedInfantryWorkerDestinations(fromKey, unit);
+    const roadedBoostedTargets = getRoadedInfantryWorkerDestinations(fromKey, unit);
+    const archerBoostedTargets = getArcherAdvanceDestinations(fromKey, unit);
     const adjacent = isAdjacent(from, to);
-    const boosted = boostedTargets.has(toKey);
-    if (!adjacent && !boosted) return 'Move invalid: destination is not adjacent or eligible roaded open-owned bonus movement.';
+    const boosted = roadedBoostedTargets.has(toKey) || archerBoostedTargets.has(toKey);
+    if (!adjacent && !boosted) return 'Move invalid: destination is not adjacent or eligible open-owned bonus movement.';
   }
 
   const destUnit = units.get(toKey);
@@ -2098,8 +2145,8 @@ function explainMoveFailure(fromKey, toKey) {
     const canAttackMoveArcher = ['crossbow', 'barrage_captain'].includes(unit.type);
     if (isArcher(unit.type) && !canAttackMoveArcher) return `Move invalid: ${unit.type} cannot attack-move; use ranged attack.`;
     if (canAttackMoveArcher && unit.actionsLeft <= 0) return `Move invalid: ${unit.type} has no attack actions left.`;
-    if (['spearman', 'pikeman', 'lancer'].includes(unit.type) && isTileClosedFor(unit.player, toKey)) {
-      return `Attack invalid: ${unit.type} cannot attack into closed terrain.`;
+    if (['spearman', 'pikeman', 'lancer'].includes(unit.type) && isTileClosedFor(unit.player, fromKey)) {
+      return `Attack invalid: ${unit.type} cannot attack from closed terrain.`;
     }
   }
 
@@ -2122,8 +2169,9 @@ function canMove(fromKey, toKey) {
   } else {
     const from = getCellByKey(fromKey);
     const to = getCellByKey(toKey);
-    const boostedTargets = getRoadedInfantryWorkerDestinations(fromKey, unit);
-    if (!isAdjacent(from, to) && !boostedTargets.has(toKey)) return false;
+    const roadedBoostedTargets = getRoadedInfantryWorkerDestinations(fromKey, unit);
+    const archerBoostedTargets = getArcherAdvanceDestinations(fromKey, unit);
+    if (!isAdjacent(from, to) && !roadedBoostedTargets.has(toKey) && !archerBoostedTargets.has(toKey)) return false;
   }
 
   if (destinationUnit && destinationUnit.player !== unit.player) {
@@ -2131,7 +2179,7 @@ function canMove(fromKey, toKey) {
     const canAttackMoveArcher = ['crossbow', 'barrage_captain'].includes(unit.type);
     if (isArcher(unit.type) && !canAttackMoveArcher) return false;
     if (canAttackMoveArcher && unit.actionsLeft <= 0) return false;
-    if (['spearman', 'pikeman', 'lancer'].includes(unit.type) && isTileClosedFor(unit.player, toKey)) return false;
+    if (['spearman', 'pikeman', 'lancer'].includes(unit.type) && isTileClosedFor(unit.player, fromKey)) return false;
   }
 
   return true;
@@ -2229,8 +2277,9 @@ function getMoveTargets(fromKey) {
     .map(([dq, dr]) => `${from.q + dq},${from.r + dr}`)
     .filter((toKey) => cellKeys.has(toKey) && canMove(fromKey, toKey));
 
-  const boosted = [...getRoadedInfantryWorkerDestinations(fromKey, unit)].filter((toKey) => canMove(fromKey, toKey));
-  return [...new Set([...base, ...boosted])];
+  const boostedRoaded = [...getRoadedInfantryWorkerDestinations(fromKey, unit)].filter((toKey) => canMove(fromKey, toKey));
+  const boostedArcher = [...getArcherAdvanceDestinations(fromKey, unit)].filter((toKey) => canMove(fromKey, toKey));
+  return [...new Set([...base, ...boostedRoaded, ...boostedArcher])];
 }
 
 function getTargets(fromKey) {
