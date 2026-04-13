@@ -411,7 +411,8 @@ function displayUnitName(unitType) {
 
 function displayUnitTextIcon(unitType) {
   const icon = UNIT_DEFS[unitType]?.emoji || '❓';
-  if (['spear', 'sling'].includes(icon)) return '';
+  if (icon === 'spear') return '🗡️';
+  if (icon === 'sling') return '🪃';
   return icon;
 }
 
@@ -759,14 +760,14 @@ function paintOwnedTile(q, r, player, tileType) {
 function placeStart(q, r, player, type = 'axman') {
   const tile = paintOwnedTile(q, r, player, 'homestead');
   if (!tile) return;
-  units.set(`${q},${r}`, { player, type, movesLeft: movePointsFor(type), actionsLeft: actionPointsFor(type) });
+  units.set(`${q},${r}`, { player, type, movesLeft: movePointsFor(type), actionsLeft: actionPointsFor(type), firedThisTurn: false });
 }
 
 function placeMediumAiStart(q, r, player, type = 'axman') {
   const layout = ['homestead', 'pasture', 'farm', 'forest', 'forest', 'forest'];
   paintOwnedTile(q, r, player, 'village');
   DIRECTIONS.forEach(([dq, dr], idx) => paintOwnedTile(q + dq, r + dr, player, layout[idx] || 'forest'));
-  units.set(`${q},${r}`, { player, type, movesLeft: movePointsFor(type), actionsLeft: actionPointsFor(type) });
+  units.set(`${q},${r}`, { player, type, movesLeft: movePointsFor(type), actionsLeft: actionPointsFor(type), firedThisTurn: false });
 }
 
 function resetTurnActionsForPlayers(players) {
@@ -1048,7 +1049,7 @@ function aiActionWouldCauseShortage(action, player = 'red') {
   } else if (action.type === 'train') {
     const tile = tSnap.find((t) => keyOf(t) === action.key);
     if (!tile || uSnap.get(action.key)) return true;
-    uSnap.set(action.key, { player, type: action.unitType, movesLeft: 0, actionsLeft: 0 });
+    uSnap.set(action.key, { player, type: action.unitType, movesLeft: 0, actionsLeft: 0, firedThisTurn: false });
   } else if (action.type === 'upgrade-tile') {
     const tile = tSnap.find((t) => keyOf(t) === action.key);
     if (!tile) return true;
@@ -1233,6 +1234,7 @@ function applySerializedState(payload) {
     type: u.type,
     movesLeft: u.movesLeft,
     actionsLeft: u.actionsLeft,
+    firedThisTurn: Boolean(u.firedThisTurn),
     aiStats: { ...(u.aiStats || {}) },
   }]));
   invalidateEconomyCaches();
@@ -1336,6 +1338,9 @@ function wireDataChannel(channel) {
         const before = units.get(a.key)?.type;
         upgradeUnitAt(a.key, a.newType);
         changed = before !== units.get(a.key)?.type;
+      } else if (a.type === 'tile-action') {
+        const result = performTileActionAt(a.key, { auto: false });
+        changed = Boolean(result.did);
       } else if (a.type === 'end-turn') {
         const logs = turnOrder.flatMap((player) => enforceShortages(player));
         currentPlayer = currentPlayer === 'blue' ? 'red' : 'blue';
@@ -1687,6 +1692,7 @@ function resetTurnActions(player) {
     if (unit.player === player) {
       unit.movesLeft = movePointsFor(unit.type);
       unit.actionsLeft = actionPointsFor(unit.type);
+      unit.firedThisTurn = false;
     }
   }
 }
@@ -1743,6 +1749,50 @@ function applyTileControlAfterMove(tile, moverPlayer, moverType, tileSnapshot = 
       : 'stood on neutral tile without claiming (insufficient upkeep stream)',
     capturedEnemyTerritory: false,
   };
+}
+
+function unitHasAlternativeActionOption(key, unit, tile = getTile(key)) {
+  if (!unit || unit.player !== currentPlayer || unit.actionsLeft <= 0) return false;
+  if (isArcher(unit.type)) return true; // archers may choose to shoot instead of claiming/neutralizing
+  if (unit.type === 'surveyor') return true; // explicit user choice requested
+  if (tile && tile.owner === currentPlayer && UNIT_DEFS[unit.type]?.terrainUpgrader && (upgradePaths[tile.type] || []).length > 0) return true;
+  const uOpts = UNIT_UPGRADE_OPTIONS[tile?.type || '']?.[unit.type] || [];
+  if (uOpts.length > 0) return true;
+  return false;
+}
+
+function availableTileActionAt(key, unit = units.get(key), tile = getTile(key)) {
+  if (!unit || !tile) return null;
+  if (unit.player !== currentPlayer || unit.actionsLeft <= 0) return null;
+  if (isArcher(unit.type) && unit.firedThisTurn) return null;
+  if (tile.owner === currentPlayer) return null;
+  if (tile.owner && tile.owner !== currentPlayer) return 'neutralize';
+  if (!tile.owner && canClaimUpkeepTileNow(currentPlayer, tile.type)) return 'claim';
+  return null;
+}
+
+function performTileActionAt(key, { auto = false } = {}) {
+  const tile = getTile(key);
+  const unit = units.get(key);
+  const action = availableTileActionAt(key, unit, tile);
+  if (!tile || !unit || !action) return { did: false, text: '' };
+  if (auto && unitHasAlternativeActionOption(key, unit, tile)) {
+    return { did: false, text: `held action at ${key} (${unit.type} can use action for another option).` };
+  }
+
+  if (action === 'neutralize') {
+    const priorOwner = tile.owner;
+    tile.owner = null;
+    unit.actionsLeft = Math.max(0, unit.actionsLeft - 1);
+    invalidateEconomyCaches();
+    return { did: true, text: `neutralized ${priorOwner} territory at ${key}.`, action, priorOwner };
+  }
+
+  const priorOwner = tile.owner;
+  tile.owner = currentPlayer;
+  unit.actionsLeft = Math.max(0, unit.actionsLeft - 1);
+  invalidateEconomyCaches();
+  return { did: true, text: `claimed neutral ${tile.type} at ${key}.`, action, priorOwner };
 }
 
 function unitAtKey(key) {
@@ -2142,9 +2192,9 @@ function explainMoveFailure(fromKey, toKey) {
 
   if (destUnit && destUnit.player !== unit.player) {
     if (!canMeleeAttackOccupiedTile(unit.type)) return `Move invalid: ${unit.type} cannot move onto an enemy-occupied tile.`;
+    if (unit.actionsLeft <= 0) return `Move invalid: ${unit.type} has no actions left to attack.`;
     const canAttackMoveArcher = ['crossbow', 'barrage_captain'].includes(unit.type);
     if (isArcher(unit.type) && !canAttackMoveArcher) return `Move invalid: ${unit.type} cannot attack-move; use ranged attack.`;
-    if (canAttackMoveArcher && unit.actionsLeft <= 0) return `Move invalid: ${unit.type} has no attack actions left.`;
     if (['spearman', 'pikeman', 'lancer'].includes(unit.type) && isTileClosedFor(unit.player, fromKey)) {
       return `Attack invalid: ${unit.type} cannot attack from closed terrain.`;
     }
@@ -2176,9 +2226,9 @@ function canMove(fromKey, toKey) {
 
   if (destinationUnit && destinationUnit.player !== unit.player) {
     if (!canMeleeAttackOccupiedTile(unit.type)) return false;
+    if (unit.actionsLeft <= 0) return false;
     const canAttackMoveArcher = ['crossbow', 'barrage_captain'].includes(unit.type);
     if (isArcher(unit.type) && !canAttackMoveArcher) return false;
-    if (canAttackMoveArcher && unit.actionsLeft <= 0) return false;
     if (['spearman', 'pikeman', 'lancer'].includes(unit.type) && isTileClosedFor(unit.player, fromKey)) return false;
   }
 
@@ -2262,6 +2312,7 @@ function rangedAttack(fromKey, toKey) {
   units.delete(toKey);
   markUnitAggression(attacker, 'kill');
   attacker.actionsLeft -= 1;
+  attacker.firedThisTurn = true;
   lastDebug = `Attack ok: ${attacker.type} shot ${target.type} at ${toKey}.`;
   return true;
 }
@@ -2299,8 +2350,8 @@ function moveEconomyWarning(fromKey, toKey, nextMoves) {
   uSnap.set(toKey, { ...srcUnit, movesLeft: nextMoves });
 
   const t = tSnap.find((x) => keyOf(x) === toKey);
-  if (t) {
-    applyTileControlAfterMove(t, currentPlayer, srcUnit.type, tSnap, uSnap);
+  if (t && t.owner === currentPlayer) {
+    // no tile-control side effect in warning sim; explicit/auto terrain actions are evaluated at runtime
   }
 
   const deficits = economyDeficits(currentPlayer, tSnap, uSnap);
@@ -2337,7 +2388,6 @@ function moveUnit(fromKey, toKey) {
 
   // Movement never blocked by economy; shortages resolve on turn rollover.
   unit.movesLeft = nextMoves;
-  if (defeated && ['crossbow', 'barrage_captain'].includes(unit.type)) unit.actionsLeft = Math.max(0, unit.actionsLeft - 1);
   let killCount = 0;
   if (passThroughDefeat) {
     units.delete(passThroughDefeat);
@@ -2347,11 +2397,24 @@ function moveUnit(fromKey, toKey) {
   units.delete(fromKey);
   if (defeated) killCount += 1;
   if (killCount > 0) markUnitAggression(unit, 'kill', killCount);
+  if (killCount > 0) unit.actionsLeft = Math.max(0, unit.actionsLeft - 1);
   invalidateEconomyCaches();
   startMoveAnimation(fromKey, toKey, unit);
 
-  const { claimText, capturedEnemyTerritory } = applyTileControlAfterMove(destTile, currentPlayer, unit.type, tiles, units);
-  if (capturedEnemyTerritory) markUnitAggression(unit, 'capture');
+  let claimText = 'holding position';
+  if (destTile.owner !== currentPlayer) {
+    const autoTileAction = performTileActionAt(toKey, { auto: true });
+    if (autoTileAction.did) {
+      claimText = autoTileAction.text;
+      if (autoTileAction.action === 'claim' && autoTileAction.priorOwner && autoTileAction.priorOwner !== currentPlayer) {
+        markUnitAggression(unit, 'capture');
+      }
+    } else if (autoTileAction.text) {
+      claimText = autoTileAction.text;
+    } else {
+      claimText = destTile.owner ? 'stood on enemy territory' : 'stood on neutral territory';
+    }
+  }
   invalidateEconomyCaches();
   const lancerKillText = passThroughDefeat ? ` pass-through eliminated enemy at ${passThroughDefeat}.` : '';
 
@@ -2414,7 +2477,7 @@ function trainUnitAt(key, unitType) {
     return false;
   }
 
-  units.set(key, { player: currentPlayer, type: unitType, movesLeft: 0, actionsLeft: 0 });
+  units.set(key, { player: currentPlayer, type: unitType, movesLeft: 0, actionsLeft: 0, firedThisTurn: false });
   invalidateEconomyCaches();
   lastDebug = `Training ok: ${unitType} at ${key}.`;
   if (!suppressAutoRender) render();
@@ -2626,6 +2689,15 @@ function renderSelectionPanel() {
   }
 
   if (unit && unit.player === currentPlayer) {
+    const tileAction = availableTileActionAt(selectedKey, unit, tile);
+    if (tileAction) {
+      const actionLabel = tileAction === 'neutralize' ? 'Neutralize Territory' : 'Claim Territory';
+      html += `<button class="action-btn" data-tile-action="${tileAction}">${actionLabel}</button>`;
+      if (showActionHelp && unit.type === 'surveyor') {
+        html += '<div class="action-help">Surveyor can move twice, but only gets one action. Use this to choose when to claim/neutralize.</div>';
+      }
+    }
+
     const uOpts = UNIT_UPGRADE_OPTIONS[tile.type]?.[unit.type] || [];
     for (const newType of uOpts) {
       const blocked = !canSupportUnitUpgrade(currentPlayer, unit.type, newType, selectedKey);
@@ -2675,6 +2747,16 @@ function renderSelectionPanel() {
     btn.addEventListener('click', () => {
       if (requestOnlineAction({ type: 'upgrade-unit', key: selectedKey, newType: btn.dataset.upgradeUnit })) return;
       upgradeUnitAt(selectedKey, btn.dataset.upgradeUnit);
+      syncOnlineStateIfHost();
+    });
+  });
+  selectionEl.querySelectorAll('button[data-tile-action]').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      if (requestOnlineAction({ type: 'tile-action', key: selectedKey })) return;
+      const result = performTileActionAt(selectedKey, { auto: false });
+      if (result.did) lastDebug = `Action ok: ${result.text}`;
+      else lastDebug = `Action blocked at ${selectedKey}.`;
+      render();
       syncOnlineStateIfHost();
     });
   });
