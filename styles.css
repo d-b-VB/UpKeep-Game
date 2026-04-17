@@ -276,6 +276,19 @@ button:disabled { opacity: 0.45; cursor: not-allowed; }
   display: block;
 }
 
+.menu-unit-icon-wrap {
+  display: inline-flex;
+  width: 18px;
+  height: 18px;
+  vertical-align: middle;
+  margin-right: 4px;
+}
+
+.menu-unit-icon {
+  overflow: visible;
+  vertical-align: middle;
+}
+
 .action-btn.blocked {
   opacity: 0.58;
 }

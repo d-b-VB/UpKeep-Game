@@ -416,6 +416,18 @@ function displayUnitTextIcon(unitType) {
   return icon;
 }
 
+function unitTokenIconHtml(unitType) {
+  const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+  svg.setAttribute('viewBox', '0 0 32 32');
+  svg.setAttribute('width', '18');
+  svg.setAttribute('height', '18');
+  svg.setAttribute('class', 'menu-unit-icon');
+  const g = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+  renderUnitGlyph({ type: unitType, player: currentPlayer }, { x: 16, y: 16 }, g);
+  svg.appendChild(g);
+  return svg.outerHTML;
+}
+
 function aiColorChip(player) {
   const color = ownerColor(player) || '#94a3b8';
   return `<span class="ai-color-dot" style="background:${color};"></span>`;
@@ -495,7 +507,7 @@ function accentColorForTileShard(tile, shardIdx = 1) {
   if (shardIdx !== 2 || !tile.owner) return null;
   const palette = tilePalettes[tile.type] || ['#888', '#888', '#888'];
   const baseColor = palette[2] || palette[1] || palette[0] || '#888';
-  return blendHex(ownerColor(tile.owner), baseColor, 0.5);
+  return blendHex(ownerColor(tile.owner), baseColor, 0.625);
 }
 
 function getCoreMosaicTemplate(tileType, miniRadius) {
@@ -1122,7 +1134,10 @@ function runEasyAiTurn(finalizeTurn = true) {
   if (!acted) lastDebug = 'Easy AI: no action available; passing turn.';
 
   if (finalizeTurn) {
-    const logs = turnOrder.flatMap((player) => enforceShortages(player));
+    const logs = [
+      ...turnOrder.flatMap((player) => applyEndTurnTerritoryActions(player)),
+      ...turnOrder.flatMap((player) => enforceShortages(player)),
+    ];
     currentPlayer = 'blue';
     resetTurnActions('blue');
     selectedKey = null;
@@ -1342,7 +1357,10 @@ function wireDataChannel(channel) {
         const result = performTileActionAt(a.key, { auto: false });
         changed = Boolean(result.did);
       } else if (a.type === 'end-turn') {
-        const logs = turnOrder.flatMap((player) => enforceShortages(player));
+        const logs = [
+          ...turnOrder.flatMap((player) => applyEndTurnTerritoryActions(player)),
+          ...turnOrder.flatMap((player) => enforceShortages(player)),
+        ];
         currentPlayer = currentPlayer === 'blue' ? 'red' : 'blue';
         resetTurnActions(currentPlayer);
         revealExpandingTiles();
@@ -1684,6 +1702,36 @@ function enforceShortages(player) {
       deficit -= s.amount;
     }
   }
+  return logs;
+}
+
+function applyEndTurnTerritoryActions(player) {
+  const logs = [];
+  let changed = false;
+  for (const [key, unit] of units.entries()) {
+    if (unit.player !== player) continue;
+    const tile = getTile(key);
+    if (!tile) continue;
+    while (unit.actionsLeft > 0 && tile.owner !== player) {
+      if (tile.owner && tile.owner !== player) {
+        const priorOwner = tile.owner;
+        tile.owner = null;
+        unit.actionsLeft = Math.max(0, unit.actionsLeft - 1);
+        changed = true;
+        logs.push(`${player} auto-neutralized ${priorOwner} territory at ${key}.`);
+        continue;
+      }
+      if (!tile.owner && canClaimUpkeepTileNow(player, tile.type)) {
+        tile.owner = player;
+        unit.actionsLeft = Math.max(0, unit.actionsLeft - 1);
+        changed = true;
+        logs.push(`${player} auto-claimed ${tile.type} at ${key}.`);
+        continue;
+      }
+      break;
+    }
+  }
+  if (changed) invalidateEconomyCaches();
   return logs;
 }
 
@@ -2398,6 +2446,7 @@ function moveUnit(fromKey, toKey) {
   if (defeated) killCount += 1;
   if (killCount > 0) markUnitAggression(unit, 'kill', killCount);
   if (killCount > 0) unit.actionsLeft = Math.max(0, unit.actionsLeft - 1);
+  if (killCount > 0 && unit.type === 'lancer') unit.movesLeft = Math.max(0, unit.movesLeft + 1);
   invalidateEconomyCaches();
   startMoveAnimation(fromKey, toKey, unit);
 
@@ -2495,7 +2544,9 @@ function upgradeUnitAt(key, newType) {
   }
 
   unit.type = newType;
-  unit.actionsLeft -= 1;
+  unit.actionsLeft = 0;
+  unit.movesLeft = 0;
+  unit.firedThisTurn = false;
   invalidateEconomyCaches();
   lastDebug = `Unit upgrade ok: ${key} -> ${newType}.`;
   if (!suppressAutoRender) render();
@@ -2680,8 +2731,8 @@ function renderSelectionPanel() {
         costHtml += formatCostChip(res, amt, state);
       }
       costHtml += '</span>';
-      const iconLabel = displayUnitTextIcon(ut);
-      html += `<button class="action-btn ${blocked ? 'blocked' : ''}" data-train-unit="${ut}" ${blocked ? 'disabled' : ''}>Train ${iconLabel ? `${iconLabel} ` : ''}${displayUnitName(ut)}${costHtml}</button>`;
+      const tokenIcon = unitTokenIconHtml(ut);
+      html += `<button class="action-btn ${blocked ? 'blocked' : ''}" data-train-unit="${ut}" ${blocked ? 'disabled' : ''}>Train <span class="menu-unit-icon-wrap">${tokenIcon}</span> ${displayUnitName(ut)}${costHtml}</button>`;
       if (showActionHelp) {
         html += `<div class="action-help">${unitDescriptions[ut] || 'Trainable unit.'}</div>`;
       }
@@ -2718,8 +2769,8 @@ function renderSelectionPanel() {
         costHtml += formatCostChip(res, displayAmt, state);
       }
       costHtml += '</span>';
-      const iconLabel = displayUnitTextIcon(newType);
-      html += `<button class="action-btn ${blocked ? 'blocked' : ''}" data-upgrade-unit="${newType}" ${blocked ? 'disabled' : ''}>Upgrade Unit → ${iconLabel ? `${iconLabel} ` : ''}${displayUnitName(newType)}${costHtml}</button>`;
+      const tokenIcon = unitTokenIconHtml(newType);
+      html += `<button class="action-btn ${blocked ? 'blocked' : ''}" data-upgrade-unit="${newType}" ${blocked ? 'disabled' : ''}>Upgrade Unit → <span class="menu-unit-icon-wrap">${tokenIcon}</span> ${displayUnitName(newType)}${costHtml}</button>`;
       if (showActionHelp) {
         html += `<div class="action-help">${unitDescriptions[newType] || 'Unit upgrade option.'}</div>`;
       }
@@ -3313,32 +3364,21 @@ function render(logs = []) {
         group.appendChild(arc);
       }
 
-      const cls = UNIT_DEFS[unit.type]?.cls;
-      if (cls === 'infantry' || cls === 'cavalry') {
-        // Melee military uses a full white/black outline based only on movement readiness.
-        const meleeReadyColor = (isCurrent && unit.movesLeft > 0) ? '#ffffff' : '#111111';
-        const meleeRing = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
-        meleeRing.setAttribute('cx', String(pos.x));
-        meleeRing.setAttribute('cy', String(pos.y));
-        meleeRing.setAttribute('r', String(rr));
-        meleeRing.setAttribute('fill', 'none');
-        meleeRing.setAttribute('stroke', meleeReadyColor);
-        meleeRing.setAttribute('stroke-width', String(ringWidth));
-        group.appendChild(meleeRing);
-      } else if (unit.type === 'surveyor') {
-        // Top third = action, two bottom thirds = two movement steps.
-        addRingSegment(-150, -30, isCurrent && unit.actionsLeft > 0 ? actionColor : spentColor);
-        addRingSegment(-30, 90, isCurrent && unit.movesLeft >= 1 ? moveColor : spentColor);
-        addRingSegment(90, 210, isCurrent && unit.movesLeft >= 2 ? moveColor : spentColor);
-      } else if (unit.type === 'architect') {
-        // Two top thirds = actions, bottom third = movement.
-        addRingSegment(-150, -30, isCurrent && unit.actionsLeft >= 1 ? actionColor : spentColor);
-        addRingSegment(-30, 90, isCurrent && unit.actionsLeft >= 2 ? actionColor : spentColor);
-        addRingSegment(90, 210, isCurrent && unit.movesLeft > 0 ? moveColor : spentColor);
+      const twoActionUnit = ['crossbow', 'barrage_captain', 'architect'].includes(unit.type);
+      if (unit.type === 'surveyor') {
+        // Surveyor: one top center action segment, two bottom move segments.
+        addRingSegment(220, 320, isCurrent && unit.actionsLeft > 0 ? actionColor : spentColor);
+        addRingSegment(25, 95, isCurrent && unit.movesLeft >= 1 ? moveColor : spentColor);
+        addRingSegment(105, 175, isCurrent && unit.movesLeft >= 2 ? moveColor : spentColor);
+      } else if (twoActionUnit) {
+        // Two action indicators on top, one centered movement indicator on bottom.
+        addRingSegment(200, 258, isCurrent && unit.actionsLeft >= 1 ? actionColor : spentColor);
+        addRingSegment(282, 340, isCurrent && unit.actionsLeft >= 2 ? actionColor : spentColor);
+        addRingSegment(40, 140, isCurrent && unit.movesLeft > 0 ? moveColor : spentColor);
       } else {
-        // Default split: top half action, bottom half movement.
-        addRingSegment(180, 360, isCurrent && unit.actionsLeft > 0 ? actionColor : spentColor);
-        addRingSegment(0, 180, isCurrent && unit.movesLeft > 0 ? moveColor : spentColor);
+        // Default: one top action segment and one bottom movement segment.
+        addRingSegment(210, 330, isCurrent && unit.actionsLeft > 0 ? actionColor : spentColor);
+        addRingSegment(30, 150, isCurrent && unit.movesLeft > 0 ? moveColor : spentColor);
       }
 
       renderUnitGlyph(unit, pos, group);
@@ -3490,7 +3530,10 @@ endTurnBtn.addEventListener('click', () => {
   }
 
   const playersForLogs = gameMode === 'solo' ? ['blue'] : turnOrder;
-  const logs = playersForLogs.flatMap((player) => enforceShortages(player));
+  const logs = [
+    ...playersForLogs.flatMap((player) => applyEndTurnTerritoryActions(player)),
+    ...playersForLogs.flatMap((player) => enforceShortages(player)),
+  ];
 
   if (isAiGameMode()) {
     selectedKey = null;
@@ -3506,7 +3549,10 @@ endTurnBtn.addEventListener('click', () => {
         resetTurnActions('blue');
         selectedKey = null;
         revealExpandingTiles();
-        render(turnOrder.flatMap((player) => enforceShortages(player)));
+        render([
+          ...turnOrder.flatMap((player) => applyEndTurnTerritoryActions(player)),
+          ...turnOrder.flatMap((player) => enforceShortages(player)),
+        ]);
         renderAiTurnIndicator(null, []);
         return;
       }
