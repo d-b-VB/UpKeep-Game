@@ -308,9 +308,9 @@ const symbolSets = {
   manor: ['🏛️', '⚜️', '♦️', '🌸', '⚜️', '♦️'],
   estate: ['🏦', '♦️', '⚜️', '♦️', '⚜️', '♦️'],
   palace: ['🏟️', '👑', '⚜️', '👑', '⚜️', '👑'],
-  outpost: ['🗼', '🛡️', '🗼', '🛡️', '🗼', '🛡️'],
-  stronghold: ['🧱', '🗼', '🛡️', '🧱', '🗼', '🛡️'],
-  keep: ['🏰', '🗼', '🧱', '🛡️', '🧱', '🛡️'],
+  outpost: ['♜', '🛡️', '🧱', '🛡️', '🧱', '🛡️'],
+  stronghold: ['♜', '♜', '🧱', '🛡️', '🧱', '🛡️'],
+  keep: ['♜', '♜', '♜', '🧱', '🛡️', '👑'],
 };
 
 const trees = ['🌲', '🌳', '🎄'];
@@ -334,9 +334,9 @@ const BONUS_SYMBOLS = {
   manor: ['⚜️', '🪙', '🧵', '🧾', '🕯️', '🍷'],
   estate: ['💠', '🎖️', '📜', '🧭', '🪙', '🧵'],
   palace: ['👑', '💎', '🏺', '📯', '🕯️', '🪙'],
-  outpost: ['🛡️', '🧱', '🗡️', '🏹', '🧭', '📯'],
-  stronghold: ['🛡️', '⚒️', '🏹', '📯', '🧱', '🗡️'],
-  keep: ['👑', '🛡️', '📯', '🗡️', '⚔️', '🧱'],
+  outpost: ['♜', '🛡️', '🧱', '🗡️', '🏹', '📯'],
+  stronghold: ['♜', '♜', '🛡️', '⚒️', '🏹', '📯'],
+  keep: ['♜', '♜', '♜', '👑', '🛡️', '📯'],
 };
 
 const resourceKeys = ['wood', 'livestock', 'crops', 'provisions', 'supplies', 'crafts', 'luxury', 'support', 'authority', 'sovereignty'];
@@ -373,9 +373,9 @@ const tileDescriptions = {
   manor: 'Great-house tier 1 producing support line resources.',
   estate: 'Great-house tier 2 with stronger authority economy.',
   palace: 'Great-house tier 3 producing sovereignty.',
-  outpost: 'Fortification tier 1, closed to enemies.',
-  stronghold: 'Fortification tier 2 with adjacent closure control.',
-  keep: 'Fortification tier 3 with strong defensive utility.',
+  outpost: 'Fortification tier 1 (♜): tile is closed to enemies.',
+  stronghold: 'Fortification tier 2 (♜♜): own tile closed to enemies, plus adjacent closure control.',
+  keep: 'Fortification tier 3 (♜♜♜): strongest fortification, own+adjacent enemy closure pressure.',
 };
 
 const unitDescriptions = {
@@ -389,15 +389,15 @@ const unitDescriptions = {
   spearman: 'Infantry core; useful for zone control.',
   swordsman: 'Direct melee infantry option.',
   pikeman: 'Infantry with strong anti-space control role.',
-  infantry_sergeant: 'Outpost-trained infantry granting adjacent infantry free upkeep.',
+  infantry_sergeant: 'Outpost-trained captain (shield): adjacent tiles closed to enemies, open to friendly infantry; adjacent friendly infantry have no upkeep.',
   hunter: 'Early archer line from towns.',
   longbow: 'Long-range archer line from cities.',
   crossbow: 'Advanced archer with extra action economy.',
-  barrage_captain: 'Stronghold-trained elite archer granting adjacent infantry/archers free upkeep.',
+  barrage_captain: 'Stronghold-trained archer captain (bow over ribbon): adjacent tiles closed to enemies, open to friendly archers; adjacent friendly archers have no upkeep.',
   horseman: 'Fast cavalry for expansion and flanking.',
   lancer: 'Fast cavalry with follow-through movement.',
   cavalry_archer: 'Hybrid cavalry/ranged pressure unit.',
-  royal_knight: 'Keep-trained elite cavalry granting adjacent soldiers free upkeep and freer motion on owned closed tiles.',
+  royal_knight: 'Keep-trained elite cavalry (horse + crown): adjacent tiles closed to enemies, open to friendly cavalry; adjacent friendly cavalry have no upkeep.',
 };
 
 function keyOf(cell) { return `${cell.q},${cell.r}`; }
@@ -1134,9 +1134,10 @@ function runEasyAiTurn(finalizeTurn = true) {
   if (!acted) lastDebug = 'Easy AI: no action available; passing turn.';
 
   if (finalizeTurn) {
+    const endingPlayer = currentPlayer;
     const logs = [
-      ...turnOrder.flatMap((player) => applyEndTurnTerritoryActions(player)),
-      ...turnOrder.flatMap((player) => enforceShortages(player)),
+      ...applyEndTurnTerritoryActions(endingPlayer),
+      ...enforceShortages(endingPlayer),
     ];
     currentPlayer = 'blue';
     resetTurnActions('blue');
@@ -1357,9 +1358,10 @@ function wireDataChannel(channel) {
         const result = performTileActionAt(a.key, { auto: false });
         changed = Boolean(result.did);
       } else if (a.type === 'end-turn') {
+        const endingPlayer = currentPlayer;
         const logs = [
-          ...turnOrder.flatMap((player) => applyEndTurnTerritoryActions(player)),
-          ...turnOrder.flatMap((player) => enforceShortages(player)),
+          ...applyEndTurnTerritoryActions(endingPlayer),
+          ...enforceShortages(endingPlayer),
         ];
         currentPlayer = currentPlayer === 'blue' ? 'red' : 'blue';
         resetTurnActions(currentPlayer);
@@ -1513,11 +1515,11 @@ function isUnitUpkeepFree(player, key, unit, tileSnapshot = tiles, unitSnapshot 
   if (infantryFreeBySergeant) return true;
 
   const freeByCaptain = adjacentFriendlyUnits.some((adjUnit) => adjUnit.type === 'barrage_captain')
-    && ['infantry', 'archer'].includes(UNIT_DEFS[unit.type]?.cls);
+    && UNIT_DEFS[unit.type]?.cls === 'archer';
   if (freeByCaptain) return true;
 
   const freeByRoyalKnight = adjacentFriendlyUnits.some((adjUnit) => adjUnit.type === 'royal_knight')
-    && isMilitaryUnitType(unit.type);
+    && UNIT_DEFS[unit.type]?.cls === 'cavalry';
   if (freeByRoyalKnight) return true;
 
   if (!isMilitaryUnitType(unit.type)) return false;
@@ -1874,9 +1876,25 @@ function terrainClosedForPlayer(tile, player) {
   return false;
 }
 
-function isTileClosedFor(player, key) {
+function isTileClosedFor(player, key, unitType = null) {
   const tile = getTile(key);
   if (!tile) return true;
+  const unitCls = UNIT_DEFS[unitType || '']?.cls || null;
+
+  // Captain auras: friendly open lanes by class.
+  if (unitCls === 'infantry' && adjacentKeys(key).some((nKey) => {
+    const u = unitAtKey(nKey);
+    return u?.player === player && u.type === 'infantry_sergeant';
+  })) return false;
+  if (unitCls === 'archer' && adjacentKeys(key).some((nKey) => {
+    const u = unitAtKey(nKey);
+    return u?.player === player && u.type === 'barrage_captain';
+  })) return false;
+  if (unitCls === 'cavalry' && adjacentKeys(key).some((nKey) => {
+    const u = unitAtKey(nKey);
+    return u?.player === player && u.type === 'royal_knight';
+  })) return false;
+
   if (terrainClosedForPlayer(tile, player)) return true;
 
   // Enemy strongholds and keeps close adjacent tiles.
@@ -1905,6 +1923,13 @@ function isTileClosedFor(player, key) {
       .filter((u) => u && u.player === spear.player && isMeleeMilitary(u.type));
 
     if (friends.length >= 2) return true; // spear + another friendly melee military unit
+  }
+
+  // Captain auras: adjacent tiles closed to enemies.
+  for (const nKey of adjacentKeys(key)) {
+    const u = unitAtKey(nKey);
+    if (!u || u.player === player) continue;
+    if (u.type === 'infantry_sergeant' || u.type === 'barrage_captain' || u.type === 'royal_knight') return true;
   }
 
   return false;
@@ -1937,6 +1962,12 @@ function dynamicClosureOwnerFor(player, key) {
     if (friends.length >= 2) return spear.player;
   }
 
+  for (const nKey of adjacentKeys(key)) {
+    const u = unitAtKey(nKey);
+    if (!u || u.player === player) continue;
+    if (u.type === 'infantry_sergeant' || u.type === 'barrage_captain' || u.type === 'royal_knight') return u.player;
+  }
+
   return null;
 }
 
@@ -1949,7 +1980,7 @@ function canUseLongWeaponFrom(key, unitType) {
   if (unitType !== 'longbow') return true;
   const unit = unitAtKey(key);
   const player = unit?.player || currentPlayer;
-  return !isTileClosedFor(player, key);
+  return !isTileClosedFor(player, key, unitType);
 }
 
 function isCavalry(unitType) {
@@ -1992,7 +2023,7 @@ function getRoadedInfantryWorkerDestinations(fromKey, unit) {
       const tile = getTile(nextKey);
       if (!tile) continue;
       const isOwned = tile.owner === unit.player;
-      const isOpen = !isTileClosedFor(unit.player, nextKey);
+      const isOpen = !isTileClosedFor(unit.player, nextKey, unit.type);
 
       // Step 1 must be both open + owned.
       if (step === 1) {
@@ -2041,14 +2072,14 @@ function getArcherAdvanceDestinations(fromKey, unit) {
     if (!stepOneTile) continue;
     if (stepOneOcc && stepOneOcc.player !== unit.player) continue;
     if (stepOneTile.owner !== unit.player) continue;
-    if (isTileClosedFor(unit.player, stepOneKey)) continue;
+    if (isTileClosedFor(unit.player, stepOneKey, unit.type)) continue;
 
     for (const stepTwoKey of adjacentKeys(stepOneKey)) {
       if (stepTwoKey === fromKey) continue;
       const stepTwoTile = getTile(stepTwoKey);
       if (!stepTwoTile) continue;
       if (stepTwoTile.owner !== unit.player) continue;
-      if (isTileClosedFor(unit.player, stepTwoKey)) continue;
+      if (isTileClosedFor(unit.player, stepTwoKey, unit.type)) continue;
 
       const toCell = getCellByKey(stepTwoKey);
       let introducesNewThreat = false;
@@ -2085,7 +2116,7 @@ function getCavalryDestinations(fromKey, unit) {
       const friendlyOcc = occ && occ.player === startPlayer;
       const nextTile = getTile(nextKey);
       const royalClaimedOverride = unit.type === 'royal_knight' && nextTile?.owner === startPlayer;
-      const nextClosed = royalClaimedOverride ? false : isTileClosedFor(startPlayer, nextKey);
+      const nextClosed = royalClaimedOverride ? false : isTileClosedFor(startPlayer, nextKey, unit.type);
 
       // Cavalry may pass through open tiles and friendlies, but not through hostile units.
       const hostileOcc = occ && occ.player !== startPlayer;
@@ -2124,7 +2155,7 @@ function getLancerRouteMap(fromKey, unit) {
       const step = current.steps + 1;
       if (step > maxSteps) continue;
 
-      const nextClosed = isTileClosedFor(startPlayer, nextKey);
+      const nextClosed = isTileClosedFor(startPlayer, nextKey, unit.type);
       const occ = unitAtKey(nextKey);
       const friendlyOcc = occ && occ.player === startPlayer;
       const hostileOcc = occ && occ.player !== startPlayer;
@@ -2177,7 +2208,7 @@ function getSurveyorReach(fromKey, unit) {
       const occ = unitAtKey(nextKey);
       const friendlyOcc = occ && occ.player === startPlayer;
       const hostileOcc = occ && occ.player !== startPlayer;
-      const nextClosed = isTileClosedFor(startPlayer, nextKey);
+      const nextClosed = isTileClosedFor(startPlayer, nextKey, unit.type);
 
       const canPass = !nextClosed && !hostileOcc;
       const canStop = !occ; // surveyor ends on empty tile only
@@ -2243,7 +2274,7 @@ function explainMoveFailure(fromKey, toKey) {
     if (unit.actionsLeft <= 0) return `Move invalid: ${unit.type} has no actions left to attack.`;
     const canAttackMoveArcher = ['crossbow', 'barrage_captain'].includes(unit.type);
     if (isArcher(unit.type) && !canAttackMoveArcher) return `Move invalid: ${unit.type} cannot attack-move; use ranged attack.`;
-    if (['spearman', 'pikeman', 'lancer'].includes(unit.type) && isTileClosedFor(unit.player, fromKey)) {
+    if (['spearman', 'pikeman', 'lancer'].includes(unit.type) && isTileClosedFor(unit.player, fromKey, unit.type)) {
       return `Attack invalid: ${unit.type} cannot attack from closed terrain.`;
     }
   }
@@ -2277,7 +2308,7 @@ function canMove(fromKey, toKey) {
     if (unit.actionsLeft <= 0) return false;
     const canAttackMoveArcher = ['crossbow', 'barrage_captain'].includes(unit.type);
     if (isArcher(unit.type) && !canAttackMoveArcher) return false;
-    if (['spearman', 'pikeman', 'lancer'].includes(unit.type) && isTileClosedFor(unit.player, fromKey)) return false;
+    if (['spearman', 'pikeman', 'lancer'].includes(unit.type) && isTileClosedFor(unit.player, fromKey, unit.type)) return false;
   }
 
   return true;
@@ -2941,6 +2972,27 @@ function renderCrossbowGlyph(pos) {
   return g;
 }
 
+function renderBarrageCaptainGlyph(pos) {
+  const g = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+
+  const ribbon = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+  ribbon.setAttribute('x', String(pos.x + 2));
+  ribbon.setAttribute('y', String(pos.y + 4));
+  ribbon.setAttribute('class', 'unit-icon');
+  ribbon.style.fontSize = '16px';
+  ribbon.textContent = '🎖️';
+  g.appendChild(ribbon);
+
+  const bow = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+  bow.setAttribute('x', String(pos.x - 3));
+  bow.setAttribute('y', String(pos.y + 1));
+  bow.setAttribute('class', 'unit-icon');
+  bow.style.fontSize = '16px';
+  bow.textContent = '🏹';
+  g.appendChild(bow);
+  return g;
+}
+
 function renderCavalryArcherGlyph(pos) {
   const g = document.createElementNS('http://www.w3.org/2000/svg', 'g');
   const horse = document.createElementNS('http://www.w3.org/2000/svg', 'text');
@@ -3052,6 +3104,10 @@ function renderUnitGlyph(unit, pos, group) {
   }
   if (unit.type === 'crossbow') {
     group.appendChild(renderCrossbowGlyph(pos));
+    return;
+  }
+  if (unit.type === 'barrage_captain') {
+    group.appendChild(renderBarrageCaptainGlyph(pos));
     return;
   }
   if (unit.type === 'cavalry_archer') {
@@ -3529,10 +3585,10 @@ endTurnBtn.addEventListener('click', () => {
     return;
   }
 
-  const playersForLogs = gameMode === 'solo' ? ['blue'] : turnOrder;
+  const endingPlayer = currentPlayer;
   const logs = [
-    ...playersForLogs.flatMap((player) => applyEndTurnTerritoryActions(player)),
-    ...playersForLogs.flatMap((player) => enforceShortages(player)),
+    ...applyEndTurnTerritoryActions(endingPlayer),
+    ...enforceShortages(endingPlayer),
   ];
 
   if (isAiGameMode()) {
@@ -3549,10 +3605,7 @@ endTurnBtn.addEventListener('click', () => {
         resetTurnActions('blue');
         selectedKey = null;
         revealExpandingTiles();
-        render([
-          ...turnOrder.flatMap((player) => applyEndTurnTerritoryActions(player)),
-          ...turnOrder.flatMap((player) => enforceShortages(player)),
-        ]);
+        render(logs);
         renderAiTurnIndicator(null, []);
         return;
       }
@@ -3561,6 +3614,8 @@ endTurnBtn.addEventListener('click', () => {
       renderAiTurnIndicator(next, aiQueue);
       try {
         runEasyAiTurn(false);
+        logs.push(...applyEndTurnTerritoryActions(next));
+        logs.push(...enforceShortages(next));
       } catch (error) {
         lastDebug = `AI turn error (${next}): ${error?.message || error}`;
       }
