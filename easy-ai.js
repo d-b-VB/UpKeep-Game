@@ -1,0 +1,785 @@
+(function initEasyAI(globalScope) {
+  function keyToCell(key) {
+    const [q, r] = key.split(',').map(Number);
+    return { q, r };
+  }
+
+  function cubeDistance(a, b) {
+    const as = -a.q - a.r;
+    const bs = -b.q - b.r;
+    return Math.max(Math.abs(a.q - b.q), Math.abs(a.r - b.r), Math.abs(as - bs));
+  }
+
+  function tileByKey(tiles) {
+    const m = new Map();
+    for (const t of tiles) m.set(t.key, t);
+    return m;
+  }
+
+  function unitByKey(units) {
+    const m = new Map();
+    for (const u of units) m.set(u.key, u);
+    return m;
+  }
+
+  function unitClass(state, type) {
+    return state.unitDefs?.[type]?.cls || '';
+  }
+
+  function isLongWeapon(type) {
+    return ['spearman', 'pikeman', 'lancer', 'longbow'].includes(type);
+  }
+
+  function prefersClosed(type) {
+    return ['swordsman', 'infantry_sergeant', 'axman', 'worker', 'laborer', 'architect'].includes(type);
+  }
+
+  function pickTargetResource(state) {
+    const order = state.resourceOrder || [];
+    const avail = state.eco?.available || {};
+    if (!order.length) return 'wood';
+
+    // Maintain descending ladder: wood > livestock > crops > provisions > ...
+    for (let i = 0; i < order.length - 1; i += 1) {
+      const upper = Number(avail[order[i]] || 0);
+      const lower = Number(avail[order[i + 1]] || 0);
+      if (upper <= lower) return order[i];
+    }
+
+    const core = order.slice(0, 4);
+    let target = core[0] || order[0];
+    let best = Number.POSITIVE_INFINITY;
+    for (const r of core) {
+      const v = Number(avail[r] || 0);
+      if (v < best) {
+        best = v;
+        target = r;
+      }
+    }
+    return target;
+  }
+
+  function buildAggressiveProgressionGoal(state) {
+    const me = state.currentPlayer || 'red';
+    const avail = state.eco?.available || {};
+    const tiles = state.tiles || [];
+    const owned = tiles.filter((t) => t.owner === me);
+    const countByType = {};
+    for (const t of owned) countByType[t.type] = (countByType[t.type] || 0) + 1;
+
+    const wood = Number(avail.wood || 0);
+    const livestock = Number(avail.livestock || 0);
+    const crops = Number(avail.crops || 0);
+    const provisions = Number(avail.provisions || 0);
+
+    const resourceGoals = [];
+    const tileGoals = new Set();
+
+    if (wood >= 2 && livestock < 2) {
+      resourceGoals.push('livestock');
+      tileGoals.add('pasture');
+    }
+    if (wood >= 2 && livestock >= 2 && crops < 2) {
+      resourceGoals.push('crops');
+      tileGoals.add('farm');
+    }
+    if (wood >= 2 && livestock >= 2 && crops >= 2 && provisions < 2) {
+      resourceGoals.push('provisions');
+      tileGoals.add('homestead');
+    }
+
+    if (wood >= 2 && provisions < 2) tileGoals.add('homestead');
+
+    const homestead = Number(countByType.homestead || 0);
+    const village = Number(countByType.village || 0);
+    const town = Number(countByType.town || 0);
+    const city = Number(countByType.city || 0);
+    const manor = Number(countByType.manor || 0);
+    const estate = Number(countByType.estate || 0);
+    const palace = Number(countByType.palace || 0);
+
+    if (homestead >= 2 && village < 2) tileGoals.add('village');
+    if (village >= 2 && town < 2 && manor < 2) {
+      tileGoals.add('town');
+      tileGoals.add('manor');
+    }
+    if (town >= 2 && city < 2 && estate < 2) {
+      tileGoals.add('city');
+      tileGoals.add('estate');
+    }
+    if (city >= 2) {
+      if (manor < 2) tileGoals.add('manor');
+      if (estate < 2) tileGoals.add('estate');
+      if (palace < 2) tileGoals.add('palace');
+    }
+
+    return { resourceGoals, tileGoals };
+  }
+
+  function buildResourceBalancePlan(state) {
+    const order = state.resourceOrder || [];
+    const avail = state.eco?.available || {};
+    const strongUpgradeFrom = new Set();
+    const mildCaptureTargets = new Set();
+    const avoidCaptureFrom = new Set();
+
+    for (let i = 0; i < order.length - 1; i += 1) {
+      const upperRes = order[i];
+      const lowerRes = order[i + 1];
+      const upper = Number(avail[upperRes] || 0);
+      const lower = Number(avail[lowerRes] || 0);
+      const hasGap = upper >= lower + 2;
+      const strongGap = hasGap && upper >= 2 * Math.max(1, lower);
+
+      if (strongGap) {
+        strongUpgradeFrom.add(upperRes);
+        avoidCaptureFrom.add(upperRes);
+      } else if (hasGap) {
+        mildCaptureTargets.add(lowerRes);
+      }
+    }
+
+    return { strongUpgradeFrom, mildCaptureTargets, avoidCaptureFrom };
+  }
+
+  function isWorkerClass(cls) {
+    return cls === 'worker' || cls === 'defworker';
+  }
+
+  function neighborsOfCell(cell) {
+    return [
+      `${cell.q + 1},${cell.r}`,
+      `${cell.q - 1},${cell.r}`,
+      `${cell.q},${cell.r + 1}`,
+      `${cell.q},${cell.r - 1}`,
+      `${cell.q + 1},${cell.r - 1}`,
+      `${cell.q - 1},${cell.r + 1}`,
+    ];
+  }
+
+  function enemyThreatContext(state) {
+    const me = state.currentPlayer || 'red';
+    const tiles = state.tiles || [];
+    const units = state.units || [];
+    const myUnits = units.filter((u) => u.player === me);
+    const enemyUnits = units.filter((u) => u.player !== me);
+    const tileMap = tileByKey(tiles);
+    const myCells = myUnits.map((u) => keyToCell(u.key));
+    const threatByKey = new Map();
+    const targetResourcePressure = { wood: 0, livestock: 0, crops: 0 };
+
+    for (const enemy of enemyUnits) {
+      const eCell = keyToCell(enemy.key);
+      const stats = enemy.aiStats || {};
+      const kills = Number(stats.kills || 0);
+      const captures = Number(stats.captures || 0);
+      const enemyCls = unitClass(state, enemy.type);
+      let border = false;
+      for (const nKey of neighborsOfCell(eCell)) {
+        const t = tileMap.get(nKey);
+        if (t && t.owner === me) {
+          border = true;
+          break;
+        }
+      }
+      const distToUs = myCells.length ? Math.min(...myCells.map((c) => cubeDistance(c, eCell))) : 6;
+      const score = 8 + (kills * 120) + (captures * 90) + (border ? 35 : 0) + Math.max(0, 12 - distToUs);
+      threatByKey.set(enemy.key, { score, kills, captures, border, type: enemy.type, cls: enemyCls, key: enemy.key });
+
+      if (enemyCls === 'cavalry') targetResourcePressure.crops += score;
+      if (enemy.type === 'spearman' || enemy.type === 'pikeman') targetResourcePressure.wood += score;
+      if (enemy.type === 'archer' || enemyCls === 'archer') targetResourcePressure.livestock += score;
+    }
+
+    return { threatByKey, targetResourcePressure };
+  }
+
+  function strategicContext(state) {
+    const me = state.currentPlayer || 'red';
+    const opponent = 'blue';
+    const tiles = state.tiles || [];
+    const units = state.units || [];
+    const ownedTiles = tiles.filter((t) => t.owner === me);
+    const myUnits = units.filter((u) => u.player === me);
+    const opponentUnits = units.filter((u) => u.player === opponent);
+    const workers = myUnits.filter((u) => isWorkerClass(unitClass(state, u.type)));
+    const workerCount = workers.length;
+    const mySoldiers = myUnits.filter((u) => ['infantry', 'archer', 'cavalry'].includes(unitClass(state, u.type))).length;
+    const enemySoldiers = opponentUnits.filter((u) => ['infantry', 'archer', 'cavalry'].includes(unitClass(state, u.type))).length;
+
+    let frontlineThreat = 0;
+    for (const ru of myUnits) {
+      const a = keyToCell(ru.key);
+      for (const bu of opponentUnits) {
+        if (cubeDistance(a, keyToCell(bu.key)) <= 2) {
+          frontlineThreat += 1;
+          break;
+        }
+      }
+    }
+
+    const tileMap = tileByKey(tiles);
+    let workerCaptureMoves = 0;
+    const captureMovesByResource = {};
+    for (const w of workers) {
+      for (const toKey of state.legalMovesByUnit?.[w.key] || []) {
+        const t = tileMap.get(toKey);
+        const prod = state.productionByType?.[t?.type || ''];
+        if (t && t.owner !== me && prod) {
+          workerCaptureMoves += 1;
+          captureMovesByResource[prod] = (captureMovesByResource[prod] || 0) + 1;
+        }
+      }
+    }
+
+    const settlementUpgrades = (state.legalTileUpgrades || []).filter((u) => ['village', 'town', 'city'].includes(u.toType)).length;
+
+    return {
+      ownedCount: ownedTiles.length,
+      workerCount,
+      mySoldiers,
+      enemySoldiers,
+      frontlineThreat,
+      workerCaptureMoves,
+      captureMovesByResource,
+      settlementUpgrades,
+      needExpansionPush: workerCaptureMoves > 0 || settlementUpgrades > 0 || ownedTiles.length < 16,
+    };
+  }
+
+  function chooseUpgradeCandidates(state, targetResource, balancePlan, context, progressionGoal) {
+    const upgrades = state.legalTileUpgrades || [];
+    const toPriority = { city: 10, town: 8, village: 6, palace: 5, estate: 4, manor: 3, keep: 4, stronghold: 3, outpost: 2 };
+    const avail = state.eco?.available || {};
+    const prodBy = state.productionByType || {};
+    const order = state.resourceOrder || [];
+
+    const me = state.currentPlayer || 'red';
+    const owned = (state.tiles || []).filter((t) => t.owner === me);
+    const countByType = {};
+    for (const t of owned) countByType[t.type] = (countByType[t.type] || 0) + 1;
+
+    const tierTargets = {
+      homestead: Math.max(1, Math.floor((countByType.farm || 0) / 3)),
+      village: Math.max(1, Math.floor((countByType.homestead || 0) / 3)),
+      town: Math.max(1, Math.floor((countByType.village || 0) / 3)),
+      city: Math.max(1, Math.floor((countByType.town || 0) / 3)),
+      manor: Math.max(1, Math.floor((countByType.homestead || 0) / 4)),
+      estate: Math.max(1, Math.floor((countByType.manor || 0) / 3)),
+      palace: Math.max(1, Math.floor((countByType.estate || 0) / 3)),
+      outpost: Math.max(1, Math.floor((countByType.village || 0) / 2)),
+      stronghold: Math.max(1, Math.floor((countByType.town || 0) / 2)),
+      keep: Math.max(1, Math.floor((countByType.city || 0) / 2)),
+    };
+
+    return upgrades
+      .filter((u) => {
+        if (['village', 'town', 'city', 'manor', 'estate', 'palace', 'outpost', 'stronghold', 'keep'].includes(u.toType)) return true;
+        const fromRes = prodBy[u.fromType];
+        if (!fromRes) return true;
+        return Number(avail[fromRes] || 0) >= 2;
+      })
+      .map((u) => {
+        const produced = prodBy[u.toType];
+        const fromRes = prodBy[u.fromType];
+        let score = (toPriority[u.toType] || 0)
+          + (produced === targetResource ? 12 : 0)
+          + (progressionGoal?.resourceGoals?.includes(produced) ? 34 : 0)
+          + (u.toType === 'village' ? 12 : 0)
+          + (u.toType === 'town' ? 14 : 0)
+          + (u.toType === 'city' ? 16 : 0);
+
+        if (isWorkerClass(unitClass(state, u.unitType))) score += 8;
+        if (progressionGoal?.tileGoals?.has(u.toType)) score += 46;
+        if (context?.needExpansionPush && ['village', 'town', 'city', 'manor', 'estate', 'palace'].includes(u.toType)) score += 6;
+
+        if (fromRes && Number(avail[fromRes] || 0) <= 2) score -= 20;
+        if (fromRes && balancePlan?.strongUpgradeFrom?.has(fromRes)) score += 24;
+
+        // Keep lower-tier resources above higher tiers; avoid burning scarce basics.
+        const fromIdx = order.indexOf(fromRes);
+        if (fromIdx >= 0 && fromIdx < order.length - 1) {
+          const lowerRes = order[fromIdx + 1];
+          const fromAvail = Number(avail[fromRes] || 0);
+          const lowerAvail = Number(avail[lowerRes] || 0);
+          if (fromAvail <= lowerAvail + 1) score -= 36;
+        }
+
+        // Explicit anti-loop guard: avoid forest->pasture when wood is already weak vs livestock.
+        if (u.fromType === 'forest' && u.toType === 'pasture') {
+          const wood = Number(avail.wood || 0);
+          const livestock = Number(avail.livestock || 0);
+          if (wood < livestock || wood < 4) score -= 70;
+        }
+
+        // If livestock is bloated relative to crops, strongly prefer pasture->farm.
+        if (u.fromType === 'pasture' && u.toType === 'farm') {
+          const livestock = Number(avail.livestock || 0);
+          const crops = Number(avail.crops || 0);
+          if (livestock >= crops + 2) score += 22;
+          if (livestock >= 2 * Math.max(1, crops)) score += 18;
+        }
+
+        // Continue progression through homesteads/villages when basics are strong.
+        const wood = Number(avail.wood || 0);
+        const livestock = Number(avail.livestock || 0);
+        const crops = Number(avail.crops || 0);
+        const provisions = Number(avail.provisions || 0);
+        if (u.fromType === 'farm' && u.toType === 'homestead') {
+          if (wood >= 5 && livestock >= 4 && crops >= 3 && provisions <= Math.max(2, Math.floor(crops / 2))) score += 28;
+          if (provisions < 2) score += 12;
+        }
+        if (u.fromType === 'homestead' && u.toType === 'village') {
+          if (provisions >= 2 && wood >= 4 && livestock >= 3 && crops >= 2) score += 30;
+        }
+
+        // Encourage staged progression (few farms -> homestead, few homesteads -> village, etc).
+        const currentToType = countByType[u.toType] || 0;
+        if (currentToType < (tierTargets[u.toType] || 0)) score += 16;
+        else score -= 4;
+
+        score += Math.random() * 1.2;
+        return { type: 'upgrade-tile', key: u.key, toType: u.toType, score };
+      })
+      .sort((a, b) => b.score - a.score);
+  }
+
+  function chooseTrainCandidates(state, targetResource, context, threatCtx) {
+    const trains = state.legalTrains || [];
+    if (!trains.length) return [];
+
+    const rank = { homestead: 1, village: 2, town: 3, city: 4, manor: 2, estate: 3, palace: 4, outpost: 2, stronghold: 3, keep: 4 };
+    const resourceAvail = state.eco?.available || {};
+    const wood = resourceAvail.wood || 0;
+    const livestock = resourceAvail.livestock || 0;
+    const crops = resourceAvail.crops || 0;
+
+    let soldierFocus = 'infantry';
+    if (wood >= livestock && wood >= crops) soldierFocus = 'archer';
+    else if (livestock >= wood && livestock >= crops) soldierFocus = 'cavalry';
+
+    const me = state.currentPlayer || 'red';
+    const owned = (state.tiles || []).filter((t) => t.owner === me);
+    const upgradableOwned = owned.filter((t) => (state.upgradePaths?.[t.type] || []).length > 0).length;
+    const workers = (state.units || []).filter((u) => ['worker', 'defworker'].includes(unitClass(state, u.type))).length;
+    const homesteads = owned.filter((t) => t.type === 'homestead').length;
+    const axmen = (state.units || []).filter((u) => u.player === me && u.type === 'axman').length;
+    const targetAxmen = homesteads >= 1 ? Math.max(1, homesteads - 1) : 0;
+    const needWorkers = upgradableOwned > (workers * 1.3 + 1) || (context?.workerCaptureMoves || 0) > workers;
+
+    return trains.filter((t) => {
+      if (t.unitType !== 'axman') return true;
+      return axmen < targetAxmen;
+    }).map((t) => {
+      const cls = unitClass(state, t.unitType);
+      const isWorker = cls === 'worker' || cls === 'defworker';
+      const isSoldier = ['infantry', 'archer', 'cavalry'].includes(cls);
+
+      let score = (rank[t.tileType] || 0) * 8;
+      score += (rank[t.tileType] >= 3 ? 8 : 0); // most advanced settlements first
+
+      if (needWorkers) score += isWorker ? 18 : -8;
+      else score += isSoldier ? 10 : -2;
+
+      if (!needWorkers && isSoldier && cls === soldierFocus) score += 10;
+      if (isSoldier && (context?.mySoldiers || 0) + 1 < (context?.enemySoldiers || 0)) score += 16;
+      if (isSoldier && (context?.ownedCount || 0) >= 18) score += 6;
+
+      // Counter-training pressure (rough RPS): spears/pikes > cavalry, archers/swordsmen > spears/pikes, cavalry > archers.
+      const enemyPressure = threatCtx?.targetResourcePressure || {};
+      if (['spearman', 'pikeman'].includes(t.unitType)) score += (enemyPressure.crops || 0) * 0.06;
+      if (['swordsman', 'longbow', 'crossbow', 'hunter', 'barrage_captain'].includes(t.unitType)) score += (enemyPressure.wood || 0) * 0.06;
+      if (['horseman', 'lancer', 'cavalry_archer', 'royal_knight'].includes(t.unitType)) score += (enemyPressure.livestock || 0) * 0.06;
+
+      // Build army if enemy is nearby or if wood is strong enough to support military production.
+      if (isSoldier && (context?.frontlineThreat || 0) > 0) score += 10;
+      if (isSoldier && (resourceAvail.wood || 0) > (resourceAvail.livestock || 0) + 2) score += 5;
+      if (t.unitType === 'axman') score += axmen < targetAxmen ? 6 : -22;
+
+      // if target resource is weak, prefer unit classes that don't lean on weak resources
+      if (targetResource === 'wood' && cls === 'archer') score += 2;
+      if (targetResource === 'livestock' && cls === 'cavalry') score += 2;
+      if (targetResource === 'crops' && cls === 'infantry') score += 2;
+
+      score += Math.random() * 2;
+      return { type: 'train', key: t.key, unitType: t.unitType, score };
+    }).sort((a, b) => b.score - a.score);
+  }
+
+  function scoreMove(unit, fromKey, toKey, state, targetResource, tileMap, unitMap, balancePlan, progressionGoal, threatCtx) {
+    const toTile = tileMap.get(toKey);
+    const fromCell = keyToCell(fromKey);
+    const toCell = keyToCell(toKey);
+    const cls = unitClass(state, unit.type);
+    const prod = state.productionByType?.[toTile?.type || ''];
+    const adjacent = neighborsOfCell(toCell);
+    const friendlyAdj = adjacent.filter((k) => {
+      const u = unitMap.get(k);
+      return u && u.player === unit.player;
+    }).length;
+
+    let score = 0;
+    if (toTile?.owner && toTile.owner !== unit.player) score += 10;
+    else if (!toTile?.owner) score += 4;
+
+    const isCapturing = toTile && toTile.owner !== unit.player;
+    if (prod === targetResource) score += 12;
+    if (progressionGoal?.resourceGoals?.includes(prod)) score += 26;
+    if (prod && balancePlan?.mildCaptureTargets?.has(prod)) score += 9;
+    if (prod && balancePlan?.avoidCaptureFrom?.has(prod)) score -= 14;
+
+    // Capturing any nearby resource producer is always valuable.
+    if (isCapturing && prod) score += 18;
+
+    const isWorker = isWorkerClass(cls);
+    if (isWorker) {
+      // Workers should stay busy: capture first, then move toward production tiles.
+      if (isCapturing && prod) score += 22;
+      if (isCapturing && !prod) score += 8;
+      if (toTile?.owner === unit.player && prod === targetResource) score += 5;
+      if (toTile?.owner === unit.player && !prod) score -= 6;
+    }
+
+    // stay grouped
+    score += friendlyAdj * 2.5;
+    if (unit.type === 'spearman' || unit.type === 'pikeman') score += friendlyAdj * 3.2;
+
+    let directEnemyAdj = 0;
+    let archerThreat = 0;
+    let attackReady = 0;
+    for (const enemy of threatCtx?.enemyTactical || []) {
+      const d = cubeDistance(toCell, enemy.cell);
+      const enemyCls = enemy.cls;
+      const threat = enemy.threat;
+      if (d <= 1) {
+        directEnemyAdj += 1;
+        attackReady += 1 + threat * 0.02;
+      }
+      if (enemyCls === 'archer' && d <= 2) archerThreat += 1 + threat * 0.015;
+    }
+    score -= directEnemyAdj * 8;
+    score -= archerThreat * 5;
+    score += attackReady * 5;
+
+    if (!isWorker && threatCtx?.threatByKey?.size) {
+      let bestThreatProximity = 0;
+      for (const t of threatCtx.threatByKey.values()) {
+        const d = cubeDistance(toCell, keyToCell(t.key));
+        bestThreatProximity = Math.max(bestThreatProximity, (t.score * 0.08) - d * 2);
+      }
+      score += bestThreatProximity;
+    }
+
+    const closed = Boolean(toTile && state.closedTiles?.[toKey]);
+    if ((cls === 'cavalry' || isLongWeapon(unit.type)) && closed) score -= 8;
+    if (prefersClosed(unit.type) && closed) score += 4;
+
+    score += Math.max(0, 4 - cubeDistance(fromCell, toCell));
+    score += Math.random() * 1.5;
+    return score;
+  }
+
+  function chooseMoveCandidates(state, targetResource, balancePlan, progressionGoal, threatCtx) {
+    const tileMap = tileByKey(state.tiles || []);
+    const unitMap = unitByKey(state.units || []);
+    const out = [];
+    if (!threatCtx.enemyTactical) {
+      const me = state.currentPlayer;
+      threatCtx.enemyTactical = (state.units || [])
+        .filter((u) => u.player !== me)
+        .map((u) => ({
+          key: u.key,
+          cell: keyToCell(u.key),
+          cls: unitClass(state, u.type),
+          threat: threatCtx?.threatByKey?.get(u.key)?.score || 0,
+        }));
+    }
+
+    for (const unit of state.units || []) {
+      if (unit.player !== state.currentPlayer) continue;
+      const moves = state.legalMovesByUnit?.[unit.key] || [];
+      for (const toKey of moves) {
+        const score = scoreMove(unit, unit.key, toKey, state, targetResource, tileMap, unitMap, balancePlan, progressionGoal, threatCtx);
+        out.push({ type: 'move', from: unit.key, to: toKey, score });
+      }
+    }
+
+    return out.sort((a, b) => b.score - a.score);
+  }
+
+  function chooseShotCandidates(state, threatCtx) {
+    const out = [];
+    for (const unit of state.units || []) {
+      if (unit.player !== state.currentPlayer) continue;
+      const shots = state.legalShotsByUnit?.[unit.key] || [];
+      for (const to of shots) {
+        const threat = threatCtx?.threatByKey?.get(to)?.score || 0;
+        out.push({ type: 'shoot', from: unit.key, to, score: 1 + (threat * 0.12) + Math.random() });
+      }
+    }
+    return out.sort((a, b) => b.score - a.score);
+  }
+
+
+  function actionId(action) {
+    if (!action) return '';
+    if (action.type === 'move') return `move:${action.from}->${action.to}`;
+    if (action.type === 'upgrade-tile') return `upgrade:${action.key}->${action.toType}`;
+    if (action.type === 'train') return `train:${action.key}:${action.unitType}`;
+    if (action.type === 'shoot') return `shoot:${action.from}->${action.to}`;
+    return '';
+  }
+
+  function buildWorkerOptionBoosts(state, targetResource) {
+    const me = state.currentPlayer || 'red';
+    const progressionGoal = buildAggressiveProgressionGoal(state);
+    const boosts = new Map();
+    const reasons = new Map();
+    const tiles = state.tiles || [];
+    const tileMap = tileByKey(tiles);
+    const avail = state.eco?.available || {};
+    const prodBy = state.productionByType || {};
+    const order = state.resourceOrder || [];
+    const upgradesByKey = new Map();
+    for (const u of state.legalTileUpgrades || []) {
+      if (!upgradesByKey.has(u.key)) upgradesByKey.set(u.key, []);
+      upgradesByKey.get(u.key).push(u.toType);
+    }
+
+    function projectedScore(projectedAvail) {
+      let score = 0;
+      for (let i = 0; i < order.length - 1; i += 1) {
+        const upper = Number(projectedAvail[order[i]] || 0);
+        const lower = Number(projectedAvail[order[i + 1]] || 0);
+        score += (upper - lower) * 10;
+        if (upper <= lower) score -= 30;
+      }
+
+      // Hard-balance pressure on core early resources.
+      const wood = Number(projectedAvail.wood || 0);
+      const livestock = Number(projectedAvail.livestock || 0);
+      const crops = Number(projectedAvail.crops || 0);
+      const provisions = Number(projectedAvail.provisions || 0);
+      if (wood <= livestock) score -= 40;
+      if (livestock <= crops) score -= 28;
+      if (crops <= provisions) score -= 18;
+
+      const desiredProvisions = Math.max(1, Math.min(
+        Math.floor(Math.max(0, wood - 2)),
+        Math.floor(Math.max(0, livestock - 1)),
+        Math.floor(Math.max(0, crops)),
+      ));
+      const provGap = Number(projectedAvail.provisions || 0) - desiredProvisions;
+      if (provGap < 0) score += provGap * 10;
+
+      score += Number(projectedAvail.supplies || 0) * 3;
+      score += Number(projectedAvail.crafts || 0) * 3;
+      score += Number(projectedAvail.luxury || 0) * 4;
+      score += Number(projectedAvail.support || 0) * 3;
+      score += Number(projectedAvail.authority || 0) * 3;
+      score += Number(projectedAvail.sovereignty || 0) * 4;
+      return score;
+    }
+
+    function applyUpgrade(projectedAvail, workingTiles, key, toType) {
+      const tile = workingTiles.get(key);
+      if (!tile) return 0;
+      const fromType = tile.type;
+      const fromRes = prodBy[fromType];
+      const toRes = prodBy[toType];
+      if (fromRes) projectedAvail[fromRes] = Number(projectedAvail[fromRes] || 0) - 1;
+      if (toRes) projectedAvail[toRes] = Number(projectedAvail[toRes] || 0) + 1;
+      tile.type = toType;
+
+      let score = 0;
+      if (toRes === targetResource) score += 24;
+      if (fromType === 'forest' && toType === 'pasture') {
+        const wood = Number(projectedAvail.wood || 0);
+        const livestock = Number(projectedAvail.livestock || 0);
+        if (wood <= livestock + 1) score -= 120;
+      }
+      if (fromType === 'pasture' && toType === 'farm') {
+        const livestock = Number(projectedAvail.livestock || 0);
+        const crops = Number(projectedAvail.crops || 0);
+        if (livestock >= crops + 1) score += 34;
+        if (livestock >= crops + 4) score += 20;
+      }
+      if (fromType === 'farm' && toType === 'homestead') {
+        if (Number(projectedAvail.crops || 0) >= 2) score += 22;
+        const wood = Number(projectedAvail.wood || 0);
+        const livestock = Number(projectedAvail.livestock || 0);
+        const crops = Number(projectedAvail.crops || 0);
+        const provisions = Number(projectedAvail.provisions || 0);
+        if (wood >= 5 && livestock >= 4 && crops >= 3 && provisions <= 3) score += 26;
+      }
+      if (fromType === 'homestead' && ['village', 'manor', 'outpost'].includes(toType)) {
+        score += 18;
+        if (toType === 'village' && Number(projectedAvail.provisions || 0) >= 2) score += 24;
+      }
+      if (fromType === 'village' && toType === 'town') score += 16;
+      if (fromType === 'town' && toType === 'city') score += 16;
+
+      // Push structural progression when early tiers lag behind.
+      const ownedTiles = [...workingTiles.values()].filter((t) => t.owner === me);
+      const farms = ownedTiles.filter((t) => t.type === 'farm').length;
+      const homesteads = ownedTiles.filter((t) => t.type === 'homestead').length;
+      const villages = ownedTiles.filter((t) => t.type === 'village').length;
+      if (fromType === 'farm' && toType === 'homestead' && homesteads < Math.max(1, Math.floor(farms / 4))) score += 20;
+      if (fromType === 'homestead' && toType === 'village' && villages < Math.max(1, Math.floor(homesteads / 3))) score += 24;
+      return score;
+    }
+
+    function applyMove(projectedAvail, workingTiles, toKey) {
+      const t = workingTiles.get(toKey);
+      if (!t) return 0;
+      let score = 0;
+      const prod = prodBy[t.type];
+      if (t.owner !== me) {
+        t.owner = me;
+        score += 8;
+        if (prod) {
+          projectedAvail[prod] = Number(projectedAvail[prod] || 0) + 1;
+          score += 10;
+          if (prod === targetResource) score += 12;
+    if (progressionGoal?.resourceGoals?.includes(prod)) score += 26;
+        }
+      }
+      return score;
+    }
+
+    function makeWorkingTiles() {
+      const out = new Map();
+      for (const [k, t] of tileMap.entries()) out.set(k, { ...t });
+      return out;
+    }
+
+    const workerUnits = (state.units || []).filter((u) => u.player === me && isWorkerClass(unitClass(state, u.type))).slice(0, 10);
+    for (const unit of workerUnits) {
+      const moves = state.legalMovesByUnit?.[unit.key] || [];
+      const options = [];
+
+      // stay put, no upgrade
+      options.push({
+        label: `stay ${unit.key} (no upgrade)`,
+        first: null,
+        second: null,
+      });
+
+      // move only (no upgrade)
+      for (const toKey of moves) {
+        options.push({ label: `move ${unit.key}->${toKey} (no upgrade)`, first: { type: 'move', from: unit.key, to: toKey }, second: null });
+      }
+
+      // upgrade then move
+      for (const toType of (upgradesByKey.get(unit.key) || [])) {
+        for (const toKey of moves) {
+          options.push({
+            label: `upgrade ${unit.key}->${toType}, move to ${toKey}`,
+            first: { type: 'upgrade-tile', key: unit.key, toType },
+            second: { type: 'move', from: unit.key, to: toKey },
+          });
+        }
+      }
+
+      // move then upgrade (upgrade on arrival if path exists)
+      for (const toKey of moves) {
+        const dest = tileMap.get(toKey);
+        const nexts = state.upgradePaths?.[dest?.type || ''] || [];
+        for (const toType of nexts) {
+          options.push({
+            label: `move ${unit.key}->${toKey}, upgrade ${toKey}->${toType}`,
+            first: { type: 'move', from: unit.key, to: toKey },
+            second: { type: 'upgrade-tile', key: toKey, toType },
+          });
+        }
+      }
+
+      const scored = options.map((opt) => {
+        const projectedAvail = { ...avail };
+        const workingTiles = makeWorkingTiles();
+        let actionScore = 0;
+
+        const applyAction = (a) => {
+          if (!a) return;
+          if (a.type === 'move') actionScore += applyMove(projectedAvail, workingTiles, a.to);
+          if (a.type === 'upgrade-tile') actionScore += applyUpgrade(projectedAvail, workingTiles, a.key, a.toType);
+        };
+
+        applyAction(opt.first);
+        applyAction(opt.second);
+
+        const ladder = projectedScore(projectedAvail);
+        const finalScore = ladder + actionScore;
+        return { ...opt, projectedAvail, finalScore, ladder, actionScore };
+      }).sort((a, b) => b.finalScore - a.finalScore);
+
+      const best = scored[0];
+      const second = scored[1];
+      if (!best) continue;
+
+      const resSnap = `wood:${best.projectedAvail.wood || 0}, livestock:${best.projectedAvail.livestock || 0}, crops:${best.projectedAvail.crops || 0}, provisions:${best.projectedAvail.provisions || 0}`;
+      const reason = `worker ${unit.key} evaluated ${scored.length} options; best = ${best.label} | projected ${resSnap} | score ${best.finalScore.toFixed(1)} (ladder ${best.ladder.toFixed(1)} + action ${best.actionScore.toFixed(1)})${second ? ` vs next ${second.finalScore.toFixed(1)} (${second.label})` : ''}`;
+
+      if (best.first) {
+        const id = actionId(best.first);
+        boosts.set(id, (boosts.get(id) || 0) + 34);
+        reasons.set(id, reason);
+      }
+      if (best.second) {
+        const id2 = actionId(best.second);
+        boosts.set(id2, (boosts.get(id2) || 0) + 16);
+        if (!reasons.has(id2)) reasons.set(id2, reason);
+      }
+    }
+
+    return { boosts, reasons };
+  }
+
+  function chooseCandidates(state) {
+    if (!state || !state.currentPlayer) return [];
+    const targetResource = pickTargetResource(state);
+    const balancePlan = buildResourceBalancePlan(state);
+    const progressionGoal = buildAggressiveProgressionGoal(state);
+    const context = strategicContext(state);
+    const threatCtx = enemyThreatContext(state);
+    threatCtx.enemyTactical = null;
+    if (threatCtx.targetResourcePressure.wood > 10) progressionGoal.resourceGoals.push('wood');
+    if (threatCtx.targetResourcePressure.livestock > 10) progressionGoal.resourceGoals.push('livestock');
+    if (threatCtx.targetResourcePressure.crops > 10) progressionGoal.resourceGoals.push('crops');
+
+    let trains = chooseTrainCandidates(state, targetResource, context, threatCtx);
+    let moves = chooseMoveCandidates(state, targetResource, balancePlan, progressionGoal, threatCtx);
+    let upgrades = chooseUpgradeCandidates(state, targetResource, balancePlan, context, progressionGoal);
+    let shots = chooseShotCandidates(state, threatCtx);
+
+    const workerEval = buildWorkerOptionBoosts(state, targetResource);
+    const workerBoosts = workerEval.boosts || new Map();
+    const workerReasons = workerEval.reasons || new Map();
+    const applyBoosts = (arr) => arr.map((a) => ({ ...a, score: (a.score || 0) + (workerBoosts.get(actionId(a)) || 0), reason: workerReasons.get(actionId(a)) || a.reason }));
+    moves = applyBoosts(moves);
+    upgrades = applyBoosts(upgrades);
+    trains = applyBoosts(trains);
+    shots = applyBoosts(shots);
+
+    // IMPORTANT: compare all actions together by end-state score (not by action-type phase).
+    const all = [...moves, ...upgrades, ...trains, ...shots];
+
+    // Minor tactical nudges only, then global sort.
+    for (const a of all) {
+      if (a.type === 'move' && (context.captureMovesByResource?.[targetResource] || 0) > 0) a.score += 2;
+      if (a.type === 'upgrade-tile' && (context.settlementUpgrades || 0) > 0) a.score += 2;
+      if (a.type === 'upgrade-tile' && progressionGoal?.tileGoals?.has(a.toType)) a.score += 24;
+      if (a.type === 'train' && (context.enemySoldiers || 0) > (context.mySoldiers || 0)) a.score += 10;
+      if (a.type === 'upgrade-tile' && ['outpost', 'stronghold', 'keep', 'town', 'city'].includes(a.toType)) a.score += 7;
+    }
+
+    return all.sort((a, b) => (b.score || 0) - (a.score || 0));
+  }
+
+  function chooseAction(state) {
+    const candidates = chooseCandidates(state);
+    return candidates.length ? candidates[0] : null;
+  }
+
+  globalScope.UpKeepEasyAI = { chooseAction, chooseCandidates };
+}(window));
