@@ -204,6 +204,8 @@
     const opponentUnits = units.filter((u) => u.player === opponent);
     const workers = myUnits.filter((u) => isWorkerClass(unitClass(state, u.type)));
     const workerCount = workers.length;
+    const mySoldiers = myUnits.filter((u) => ['infantry', 'archer', 'cavalry'].includes(unitClass(state, u.type))).length;
+    const enemySoldiers = opponentUnits.filter((u) => ['infantry', 'archer', 'cavalry'].includes(unitClass(state, u.type))).length;
 
     let frontlineThreat = 0;
     for (const ru of myUnits) {
@@ -235,6 +237,8 @@
     return {
       ownedCount: ownedTiles.length,
       workerCount,
+      mySoldiers,
+      enemySoldiers,
       frontlineThreat,
       workerCaptureMoves,
       captureMovesByResource,
@@ -378,6 +382,8 @@
       else score += isSoldier ? 10 : -2;
 
       if (!needWorkers && isSoldier && cls === soldierFocus) score += 10;
+      if (isSoldier && (context?.mySoldiers || 0) + 1 < (context?.enemySoldiers || 0)) score += 16;
+      if (isSoldier && (context?.ownedCount || 0) >= 18) score += 6;
 
       // Counter-training pressure (rough RPS): spears/pikes > cavalry, archers/swordsmen > spears/pikes, cavalry > archers.
       const enemyPressure = threatCtx?.targetResourcePressure || {};
@@ -441,12 +447,10 @@
     let directEnemyAdj = 0;
     let archerThreat = 0;
     let attackReady = 0;
-    for (const enemy of state.units || []) {
-      if (enemy.player === unit.player) continue;
-      const eCell = keyToCell(enemy.key);
-      const d = cubeDistance(toCell, eCell);
-      const enemyCls = unitClass(state, enemy.type);
-      const threat = threatCtx?.threatByKey?.get(enemy.key)?.score || 0;
+    for (const enemy of threatCtx?.enemyTactical || []) {
+      const d = cubeDistance(toCell, enemy.cell);
+      const enemyCls = enemy.cls;
+      const threat = enemy.threat;
       if (d <= 1) {
         directEnemyAdj += 1;
         attackReady += 1 + threat * 0.02;
@@ -479,6 +483,17 @@
     const tileMap = tileByKey(state.tiles || []);
     const unitMap = unitByKey(state.units || []);
     const out = [];
+    if (!threatCtx.enemyTactical) {
+      const me = state.currentPlayer;
+      threatCtx.enemyTactical = (state.units || [])
+        .filter((u) => u.player !== me)
+        .map((u) => ({
+          key: u.key,
+          cell: keyToCell(u.key),
+          cls: unitClass(state, u.type),
+          threat: threatCtx?.threatByKey?.get(u.key)?.score || 0,
+        }));
+    }
 
     for (const unit of state.units || []) {
       if (unit.player !== state.currentPlayer) continue;
@@ -727,6 +742,7 @@
     const progressionGoal = buildAggressiveProgressionGoal(state);
     const context = strategicContext(state);
     const threatCtx = enemyThreatContext(state);
+    threatCtx.enemyTactical = null;
     if (threatCtx.targetResourcePressure.wood > 10) progressionGoal.resourceGoals.push('wood');
     if (threatCtx.targetResourcePressure.livestock > 10) progressionGoal.resourceGoals.push('livestock');
     if (threatCtx.targetResourcePressure.crops > 10) progressionGoal.resourceGoals.push('crops');
@@ -753,6 +769,8 @@
       if (a.type === 'move' && (context.captureMovesByResource?.[targetResource] || 0) > 0) a.score += 2;
       if (a.type === 'upgrade-tile' && (context.settlementUpgrades || 0) > 0) a.score += 2;
       if (a.type === 'upgrade-tile' && progressionGoal?.tileGoals?.has(a.toType)) a.score += 24;
+      if (a.type === 'train' && (context.enemySoldiers || 0) > (context.mySoldiers || 0)) a.score += 10;
+      if (a.type === 'upgrade-tile' && ['outpost', 'stronghold', 'keep', 'town', 'city'].includes(a.toType)) a.score += 7;
     }
 
     return all.sort((a, b) => (b.score || 0) - (a.score || 0));

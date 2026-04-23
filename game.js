@@ -772,14 +772,30 @@ function paintOwnedTile(q, r, player, tileType) {
 function placeStart(q, r, player, type = 'axman') {
   const tile = paintOwnedTile(q, r, player, 'homestead');
   if (!tile) return;
-  units.set(`${q},${r}`, { player, type, movesLeft: movePointsFor(type), actionsLeft: actionPointsFor(type), firedThisTurn: false });
+  units.set(`${q},${r}`, {
+    player,
+    type,
+    movesLeft: movePointsFor(type),
+    actionsLeft: actionPointsFor(type),
+    firedThisTurn: false,
+    usedRangedAttack: false,
+    usedMeleeAttack: false,
+  });
 }
 
 function placeMediumAiStart(q, r, player, type = 'axman') {
   const layout = ['homestead', 'pasture', 'farm', 'forest', 'forest', 'forest'];
   paintOwnedTile(q, r, player, 'village');
   DIRECTIONS.forEach(([dq, dr], idx) => paintOwnedTile(q + dq, r + dr, player, layout[idx] || 'forest'));
-  units.set(`${q},${r}`, { player, type, movesLeft: movePointsFor(type), actionsLeft: actionPointsFor(type), firedThisTurn: false });
+  units.set(`${q},${r}`, {
+    player,
+    type,
+    movesLeft: movePointsFor(type),
+    actionsLeft: actionPointsFor(type),
+    firedThisTurn: false,
+    usedRangedAttack: false,
+    usedMeleeAttack: false,
+  });
 }
 
 function resetTurnActionsForPlayers(players) {
@@ -1061,7 +1077,15 @@ function aiActionWouldCauseShortage(action, player = 'red') {
   } else if (action.type === 'train') {
     const tile = tSnap.find((t) => keyOf(t) === action.key);
     if (!tile || uSnap.get(action.key)) return true;
-    uSnap.set(action.key, { player, type: action.unitType, movesLeft: 0, actionsLeft: 0, firedThisTurn: false });
+    uSnap.set(action.key, {
+      player,
+      type: action.unitType,
+      movesLeft: 0,
+      actionsLeft: 0,
+      firedThisTurn: false,
+      usedRangedAttack: false,
+      usedMeleeAttack: false,
+    });
   } else if (action.type === 'upgrade-tile') {
     const tile = tSnap.find((t) => keyOf(t) === action.key);
     if (!tile) return true;
@@ -1251,6 +1275,8 @@ function applySerializedState(payload) {
     movesLeft: u.movesLeft,
     actionsLeft: u.actionsLeft,
     firedThisTurn: Boolean(u.firedThisTurn),
+    usedRangedAttack: Boolean(u.usedRangedAttack),
+    usedMeleeAttack: Boolean(u.usedMeleeAttack),
     aiStats: { ...(u.aiStats || {}) },
   }]));
   invalidateEconomyCaches();
@@ -1743,6 +1769,8 @@ function resetTurnActions(player) {
       unit.movesLeft = movePointsFor(unit.type);
       unit.actionsLeft = actionPointsFor(unit.type);
       unit.firedThisTurn = false;
+      unit.usedRangedAttack = false;
+      unit.usedMeleeAttack = false;
     }
   }
 }
@@ -2274,6 +2302,7 @@ function explainMoveFailure(fromKey, toKey) {
     if (unit.actionsLeft <= 0) return `Move invalid: ${unit.type} has no actions left to attack.`;
     const canAttackMoveArcher = ['crossbow', 'barrage_captain'].includes(unit.type);
     if (isArcher(unit.type) && !canAttackMoveArcher) return `Move invalid: ${unit.type} cannot attack-move; use ranged attack.`;
+    if (canAttackMoveArcher && unit.usedMeleeAttack) return `Move invalid: ${unit.type} has already used its melee attack action this turn.`;
     if (['spearman', 'pikeman', 'lancer'].includes(unit.type) && isTileClosedFor(unit.player, fromKey, unit.type)) {
       return `Attack invalid: ${unit.type} cannot attack from closed terrain.`;
     }
@@ -2308,6 +2337,7 @@ function canMove(fromKey, toKey) {
     if (unit.actionsLeft <= 0) return false;
     const canAttackMoveArcher = ['crossbow', 'barrage_captain'].includes(unit.type);
     if (isArcher(unit.type) && !canAttackMoveArcher) return false;
+    if (canAttackMoveArcher && unit.usedMeleeAttack) return false;
     if (['spearman', 'pikeman', 'lancer'].includes(unit.type) && isTileClosedFor(unit.player, fromKey, unit.type)) return false;
   }
 
@@ -2329,6 +2359,7 @@ function canRangedAttack(fromKey, toKey) {
   if (!attacker || !target) return false;
   if (attacker.player !== currentPlayer || target.player === currentPlayer) return false;
   if (!isArcher(attacker.type) || attacker.actionsLeft <= 0) return false;
+  if (['crossbow', 'barrage_captain'].includes(attacker.type) && attacker.usedRangedAttack) return false;
   if (!canUseLongWeaponFrom(fromKey, attacker.type)) return false;
 
   const movedThisTurn = attacker.movesLeft < movePointsFor(attacker.type);
@@ -2367,6 +2398,7 @@ function explainAttackFailure(fromKey, toKey) {
   if (!isArcher(attacker.type)) return `Attack invalid: ${attacker.type} is not an archer.`;
   if (attacker.player !== currentPlayer) return `Attack invalid: it is ${currentPlayer}'s turn.`;
   if (attacker.actionsLeft <= 0) return 'Attack invalid: unit has no actions left.';
+  if (['crossbow', 'barrage_captain'].includes(attacker.type) && attacker.usedRangedAttack) return `Attack invalid: ${attacker.type} has already used its ranged attack action this turn.`;
   if (!target) return 'Attack invalid: no enemy unit on target tile.';
   if (target.player === currentPlayer) return 'Attack invalid: cannot target your own unit.';
   if (!canUseLongWeaponFrom(fromKey, attacker.type)) return `Attack invalid: ${attacker.type} cannot fire from closed terrain.`;
@@ -2392,6 +2424,7 @@ function rangedAttack(fromKey, toKey) {
   markUnitAggression(attacker, 'kill');
   attacker.actionsLeft -= 1;
   attacker.firedThisTurn = true;
+  if (['crossbow', 'barrage_captain'].includes(attacker.type)) attacker.usedRangedAttack = true;
   lastDebug = `Attack ok: ${attacker.type} shot ${target.type} at ${toKey}.`;
   return true;
 }
@@ -2477,6 +2510,7 @@ function moveUnit(fromKey, toKey) {
   if (defeated) killCount += 1;
   if (killCount > 0) markUnitAggression(unit, 'kill', killCount);
   if (killCount > 0) unit.actionsLeft = Math.max(0, unit.actionsLeft - 1);
+  if (killCount > 0 && ['crossbow', 'barrage_captain'].includes(unit.type)) unit.usedMeleeAttack = true;
   if (killCount > 0 && unit.type === 'lancer') unit.movesLeft = Math.max(0, unit.movesLeft + 1);
   invalidateEconomyCaches();
   startMoveAnimation(fromKey, toKey, unit);
@@ -2557,7 +2591,15 @@ function trainUnitAt(key, unitType) {
     return false;
   }
 
-  units.set(key, { player: currentPlayer, type: unitType, movesLeft: 0, actionsLeft: 0, firedThisTurn: false });
+  units.set(key, {
+    player: currentPlayer,
+    type: unitType,
+    movesLeft: 0,
+    actionsLeft: 0,
+    firedThisTurn: false,
+    usedRangedAttack: false,
+    usedMeleeAttack: false,
+  });
   invalidateEconomyCaches();
   lastDebug = `Training ok: ${unitType} at ${key}.`;
   if (!suppressAutoRender) render();
@@ -2578,6 +2620,8 @@ function upgradeUnitAt(key, newType) {
   unit.actionsLeft = 0;
   unit.movesLeft = 0;
   unit.firedThisTurn = false;
+  unit.usedRangedAttack = false;
+  unit.usedMeleeAttack = false;
   invalidateEconomyCaches();
   lastDebug = `Unit upgrade ok: ${key} -> ${newType}.`;
   if (!suppressAutoRender) render();
@@ -2890,14 +2934,28 @@ function drawSpear(group, x1, y1, x2, y2, width = 3) {
 
 function renderSpearmanGlyph(pos) {
   const group = document.createElementNS('http://www.w3.org/2000/svg', 'g');
-  drawSpear(group, pos.x - 8, pos.y + 8, pos.x + 10, pos.y - 10, 3);
+  const pawn = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+  pawn.setAttribute('x', String(pos.x - 4));
+  pawn.setAttribute('y', String(pos.y + 4));
+  pawn.setAttribute('class', 'unit-icon');
+  pawn.style.fontSize = '16px';
+  pawn.textContent = '♟️';
+  group.appendChild(pawn);
+  drawSpear(group, pos.x + 5, pos.y + 10, pos.x + 5, pos.y - 11, 2.8);
   return group;
 }
 
 function renderPikemanGlyph(pos) {
   const group = document.createElementNS('http://www.w3.org/2000/svg', 'g');
-  drawSpear(group, pos.x - 11, pos.y + 10, pos.x + 11, pos.y - 10, 2.8);
-  drawSpear(group, pos.x - 11, pos.y - 10, pos.x + 11, pos.y + 10, 2.8);
+  const pawn = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+  pawn.setAttribute('x', String(pos.x - 3));
+  pawn.setAttribute('y', String(pos.y + 5));
+  pawn.setAttribute('class', 'unit-icon');
+  pawn.style.fontSize = '15px';
+  pawn.textContent = '♟️';
+  group.appendChild(pawn);
+  drawSpear(group, pos.x - 8, pos.y + 10, pos.x + 1, pos.y - 11, 2.6);
+  drawSpear(group, pos.x + 8, pos.y + 10, pos.x - 1, pos.y - 11, 2.6);
   return group;
 }
 
@@ -3326,36 +3384,34 @@ function render(logs = []) {
 
     const threatOwner = getDynamicClosureOwnerCached(key);
     if (threatOwner) {
-      const xColor = ownerColor(threatOwner) || '#ef4444';
+      const auraColor = ownerColor(threatOwner) || '#ef4444';
       const verts = polygonVertices(pos, HEX_RADIUS * 0.86);
       for (let i = 0; i < 6; i += 2) {
         const [x1, y1] = verts[i];
         const [x2, y2] = verts[(i + 1) % 6];
         const mx = (x1 + x2) / 2;
         const my = (y1 + y2) / 2;
-        const sz = 4.2;
+        const tokenSize = 8.2;
 
-        const a = document.createElementNS('http://www.w3.org/2000/svg', 'line');
-        a.setAttribute('x1', String(mx - sz));
-        a.setAttribute('y1', String(my - sz));
-        a.setAttribute('x2', String(mx + sz));
-        a.setAttribute('y2', String(my + sz));
-        a.setAttribute('stroke', xColor);
-        a.setAttribute('stroke-width', '1.9');
-        a.setAttribute('stroke-linecap', 'round');
-        a.setAttribute('pointer-events', 'none');
-        overlayLayer.appendChild(a);
+        const tri = document.createElementNS('http://www.w3.org/2000/svg', 'polygon');
+        tri.setAttribute('points', `${mx},${my - tokenSize} ${mx - tokenSize * 0.82},${my + tokenSize * 0.75} ${mx + tokenSize * 0.82},${my + tokenSize * 0.75}`);
+        tri.setAttribute('fill', auraColor);
+        tri.setAttribute('opacity', '0.92');
+        tri.setAttribute('stroke', '#0f172a');
+        tri.setAttribute('stroke-width', '0.9');
+        tri.setAttribute('pointer-events', 'none');
+        overlayLayer.appendChild(tri);
 
-        const b = document.createElementNS('http://www.w3.org/2000/svg', 'line');
-        b.setAttribute('x1', String(mx + sz));
-        b.setAttribute('y1', String(my - sz));
-        b.setAttribute('x2', String(mx - sz));
-        b.setAttribute('y2', String(my + sz));
-        b.setAttribute('stroke', xColor);
-        b.setAttribute('stroke-width', '1.9');
-        b.setAttribute('stroke-linecap', 'round');
-        b.setAttribute('pointer-events', 'none');
-        overlayLayer.appendChild(b);
+        const shield = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+        shield.setAttribute('x', String(mx));
+        shield.setAttribute('y', String(my + 2.8));
+        shield.setAttribute('text-anchor', 'middle');
+        shield.setAttribute('pointer-events', 'none');
+        shield.setAttribute('class', 'symbol');
+        shield.style.fontSize = '8.5px';
+        shield.style.opacity = '0.98';
+        shield.textContent = '🛡️';
+        overlayLayer.appendChild(shield);
       }
     }
 
