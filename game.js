@@ -564,19 +564,65 @@ function renderCoreMosaicForTile(mosaicGroup, tile, miniRadius) {
   }
 }
 
-function buildProductionContext(tileSnapshot = tiles) {
+function buildProductionContext(tileSnapshot = tiles, unitSnapshot = units) {
   const tileMap = new Map(tileSnapshot.map((t) => [keyOf(t), t]));
   const palaceCountByPlayer = new Map();
+  const settlementByPlayer = new Map();
+  const constablesByPlayer = new Map();
   for (const t of tileSnapshot) {
     if (t.type !== 'palace' || !t.owner) continue;
     palaceCountByPlayer.set(t.owner, (palaceCountByPlayer.get(t.owner) || 0) + 1);
   }
-  return { tileMap, palaceCountByPlayer };
+  for (const t of tileSnapshot) {
+    if (!t.owner) continue;
+    if (['homestead', 'outpost', 'manor', 'village', 'stronghold', 'estate', 'town', 'keep', 'palace', 'city'].includes(t.type)) {
+      if (!settlementByPlayer.has(t.owner)) settlementByPlayer.set(t.owner, []);
+      settlementByPlayer.get(t.owner).push(t);
+    }
+  }
+  for (const [k, u] of unitSnapshot.entries()) {
+    if (u.type !== 'constable') continue;
+    if (!constablesByPlayer.has(u.player)) constablesByPlayer.set(u.player, []);
+    constablesByPlayer.get(u.player).push(getCellByKey(k));
+  }
+  return { tileMap, palaceCountByPlayer, settlementByPlayer, constablesByPlayer };
+}
+
+function collectionRangeForType(tileType) {
+  if (['homestead', 'outpost', 'manor'].includes(tileType)) return 1;
+  if (['village', 'stronghold', 'estate'].includes(tileType)) return 2;
+  if (['town', 'keep', 'palace'].includes(tileType)) return 3;
+  if (tileType === 'city') return 4;
+  return 0;
+}
+
+function isTileCollectibleForPlayer(player, tile, unitSnapshot = units, prodCtx = null) {
+  if (!tile || tile.owner !== player) return false;
+  const tKey = keyOf(tile);
+  const occ = unitSnapshot.get(tKey);
+  if (occ?.player === player) return true;
+
+  const ctx = prodCtx || buildProductionContext(tiles, unitSnapshot);
+  const tileCell = getCellByKey(tKey);
+
+  const settlements = ctx.settlementByPlayer.get(player) || [];
+  for (const st of settlements) {
+    const rr = collectionRangeForType(st.type);
+    if (rr <= 0) continue;
+    if (cubeDistance(tileCell, st) <= rr) return true;
+  }
+
+  const constables = ctx.constablesByPlayer.get(player) || [];
+  for (const c of constables) {
+    if (cubeDistance(tileCell, c) <= 1) return true;
+  }
+  return false;
 }
 
 function productionQtyForTile(player, tile, tileSnapshot = tiles, unitSnapshot = units, prodCtx = null) {
   const prodKey = productionByType[tile.type];
   if (!prodKey || tile.owner !== player) return 0;
+  if (!isTileCollectibleForPlayer(player, tile, unitSnapshot, prodCtx)) return 0;
 
   const ctx = prodCtx || buildProductionContext(tileSnapshot);
   const settlementTypes = new Set(Object.keys(structureUpkeep));
@@ -1569,7 +1615,7 @@ function computeEconomy(player, tileSnapshot = tiles, unitSnapshot = units) {
 
   const produced = Object.fromEntries(resourceKeys.map((k) => [k, 0]));
   const used = Object.fromEntries(resourceKeys.map((k) => [k, 0]));
-  const prodCtx = buildProductionContext(tileSnapshot);
+  const prodCtx = buildProductionContext(tileSnapshot, unitSnapshot);
 
   for (const tile of tileSnapshot) {
     if (tile.owner !== player) continue;
@@ -1601,7 +1647,7 @@ function getResourceContributors(player, resource, mode, tileSnapshot = tiles, u
   if (useCache && resourceContributorCache.has(cacheKey)) return resourceContributorCache.get(cacheKey);
 
   const out = new Set();
-  const prodCtx = buildProductionContext(tileSnapshot);
+  const prodCtx = buildProductionContext(tileSnapshot, unitSnapshot);
   for (const tile of tileSnapshot) {
     if (tile.owner !== player) continue;
     const key = keyOf(tile);
@@ -3298,7 +3344,9 @@ function render(logs = []) {
     terrainLayer.appendChild(mosaicGroup);
 
     const houses = new Set(['🏠', '🏡']);
+    const collectCtx = buildProductionContext(tiles, units);
     for (const tile of tiles) {
+      if (!tile.owner || !isTileCollectibleForPlayer(tile.owner, tile, units, collectCtx)) continue;
       const pos = tilePositionMap.get(keyOf(tile)) || axialToPixel(tile);
       tile.symbols.forEach((symbol, i) => {
         const angle = (Math.PI / 180) * (60 * i - 30);
