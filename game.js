@@ -564,7 +564,13 @@ function renderCoreMosaicForTile(mosaicGroup, tile, miniRadius) {
   }
 }
 
+const settlementTypes = new Set(Object.keys(structureUpkeep));
+
 function buildProductionContext(tileSnapshot = tiles, unitSnapshot = units) {
+  const useCache = isLiveEconomyState(tileSnapshot, unitSnapshot);
+  const cacheKey = `${economyRevision}|prodctx`;
+  if (useCache && productionContextCache.has(cacheKey)) return productionContextCache.get(cacheKey);
+
   const tileMap = new Map(tileSnapshot.map((t) => [keyOf(t), t]));
   const palaceCountByPlayer = new Map();
   const settlementByPlayer = new Map();
@@ -575,7 +581,7 @@ function buildProductionContext(tileSnapshot = tiles, unitSnapshot = units) {
   }
   for (const t of tileSnapshot) {
     if (!t.owner) continue;
-    if (['homestead', 'outpost', 'manor', 'village', 'stronghold', 'estate', 'town', 'keep', 'palace', 'city'].includes(t.type)) {
+    if (collectionRangeForType(t.type) > 0) {
       if (!settlementByPlayer.has(t.owner)) settlementByPlayer.set(t.owner, []);
       settlementByPlayer.get(t.owner).push(t);
     }
@@ -585,7 +591,9 @@ function buildProductionContext(tileSnapshot = tiles, unitSnapshot = units) {
     if (!constablesByPlayer.has(u.player)) constablesByPlayer.set(u.player, []);
     constablesByPlayer.get(u.player).push(getCellByKey(k));
   }
-  return { tileMap, palaceCountByPlayer, settlementByPlayer, constablesByPlayer };
+  const ctx = { tileMap, palaceCountByPlayer, settlementByPlayer, constablesByPlayer };
+  if (useCache) productionContextCache.set(cacheKey, ctx);
+  return ctx;
 }
 
 function collectionRangeForType(tileType) {
@@ -594,6 +602,19 @@ function collectionRangeForType(tileType) {
   if (['town', 'keep', 'palace'].includes(tileType)) return 3;
   if (tileType === 'city') return 4;
   return 0;
+}
+
+function isTileInSettlementRange(tile, prodCtx = null) {
+  if (!tile) return false;
+  const ctx = prodCtx || buildProductionContext(tiles, units);
+  const tileCell = getCellByKey(keyOf(tile));
+  for (const settlements of ctx.settlementByPlayer.values()) {
+    for (const st of settlements) {
+      const rr = collectionRangeForType(st.type);
+      if (rr > 0 && cubeDistance(tileCell, st) <= rr) return true;
+    }
+  }
+  return false;
 }
 
 function isTileCollectibleForPlayer(player, tile, unitSnapshot = units, prodCtx = null) {
@@ -625,7 +646,6 @@ function productionQtyForTile(player, tile, tileSnapshot = tiles, unitSnapshot =
   if (!isTileCollectibleForPlayer(player, tile, unitSnapshot, prodCtx)) return 0;
 
   const ctx = prodCtx || buildProductionContext(tileSnapshot);
-  const settlementTypes = new Set(Object.keys(structureUpkeep));
   const palaceCount = ctx.palaceCountByPlayer.get(player) || 0;
   const adjacentOwned = adjacentKeys(keyOf(tile)).map((k) => ctx.tileMap.get(k)).filter((t) => t && t.owner === player);
 
@@ -754,6 +774,7 @@ let economyRevision = 1;
 let cellTopologyRevision = 1;
 const economyCache = new Map();
 const resourceContributorCache = new Map();
+const productionContextCache = new Map();
 const adjacentKeyCache = new Map();
 const tileByKeyCache = new Map();
 const parsedCellCache = new Map();
@@ -762,6 +783,7 @@ function invalidateEconomyCaches() {
   economyRevision += 1;
   economyCache.clear();
   resourceContributorCache.clear();
+  productionContextCache.clear();
 }
 
 function rebuildTileByKeyCache() {
@@ -3346,7 +3368,7 @@ function render(logs = []) {
     const houses = new Set(['🏠', '🏡']);
     const collectCtx = buildProductionContext(tiles, units);
     for (const tile of tiles) {
-      if (!tile.owner || !isTileCollectibleForPlayer(tile.owner, tile, units, collectCtx)) continue;
+      if (!isTileInSettlementRange(tile, collectCtx)) continue;
       const pos = tilePositionMap.get(keyOf(tile)) || axialToPixel(tile);
       tile.symbols.forEach((symbol, i) => {
         const angle = (Math.PI / 180) * (60 * i - 30);
