@@ -1707,6 +1707,20 @@ function isActionSustainable(player, mutator) {
 }
 
 function canSupportTileUpgrade(player, fromType, toType) {
+  const prereqByTarget = {
+    manor: ['village', 'pasture'],
+    estate: ['manor', 'village', 'pasture', 'farm', 'town'],
+    palace: ['estate', 'manor', 'city', 'village', 'pasture', 'farm', 'forest', 'town'],
+  };
+  const needed = prereqByTarget[toType] || [];
+  if (needed.length) {
+    const owned = tiles.filter((t) => t.owner === player);
+    const typeSet = new Set(owned.map((t) => t.type));
+    for (const reqType of needed) {
+      if (!typeSet.has(reqType)) return false;
+    }
+  }
+
   const { produced, used } = computeEconomy(player);
   const fromNeed = structureUpkeep[fromType] || {};
   const toNeed = structureUpkeep[toType] || {};
@@ -1976,20 +1990,21 @@ function isTileClosedFor(player, key, unitType = null) {
   const tile = getTile(key);
   if (!tile) return true;
   const unitCls = UNIT_DEFS[unitType || '']?.cls || null;
+  const ownUnit = unitAtKey(key);
 
   // Captain auras: friendly open lanes by class.
-  if (unitCls === 'infantry' && adjacentKeys(key).some((nKey) => {
+  if (unitCls === 'infantry' && ((ownUnit?.player === player && ownUnit.type === 'infantry_sergeant') || adjacentKeys(key).some((nKey) => {
     const u = unitAtKey(nKey);
     return u?.player === player && u.type === 'infantry_sergeant';
-  })) return false;
-  if (unitCls === 'archer' && adjacentKeys(key).some((nKey) => {
+  }))) return false;
+  if (unitCls === 'archer' && ((ownUnit?.player === player && ownUnit.type === 'barrage_captain') || adjacentKeys(key).some((nKey) => {
     const u = unitAtKey(nKey);
     return u?.player === player && u.type === 'barrage_captain';
-  })) return false;
-  if (unitCls === 'cavalry' && adjacentKeys(key).some((nKey) => {
+  }))) return false;
+  if (unitCls === 'cavalry' && ((ownUnit?.player === player && ownUnit.type === 'royal_knight') || adjacentKeys(key).some((nKey) => {
     const u = unitAtKey(nKey);
     return u?.player === player && u.type === 'royal_knight';
-  })) return false;
+  }))) return false;
 
   if (terrainClosedForPlayer(tile, player)) return true;
 
@@ -3022,8 +3037,8 @@ function renderPikemanGlyph(pos) {
   pawn.style.fontSize = '15px';
   pawn.textContent = '♟️';
   group.appendChild(pawn);
-  drawSpear(group, pos.x - 8, pos.y + 10, pos.x + 1, pos.y - 11, 2.6);
-  drawSpear(group, pos.x + 8, pos.y + 10, pos.x - 1, pos.y - 11, 2.6);
+  drawSpear(group, pos.x - 8, pos.y + 10, pos.x + 4, pos.y - 9, 2.6);
+  drawSpear(group, pos.x + 8, pos.y + 10, pos.x - 4, pos.y - 9, 2.6);
   return group;
 }
 
@@ -3368,7 +3383,8 @@ function render(logs = []) {
     const houses = new Set(['🏠', '🏡']);
     const collectCtx = buildProductionContext(tiles, units);
     for (const tile of tiles) {
-      if (!isTileInSettlementRange(tile, collectCtx)) continue;
+      const tileUnit = units.get(keyOf(tile));
+      if (!isTileInSettlementRange(tile, collectCtx) && !tileUnit) continue;
       const pos = tilePositionMap.get(keyOf(tile)) || axialToPixel(tile);
       tile.symbols.forEach((symbol, i) => {
         const angle = (Math.PI / 180) * (60 * i - 30);
