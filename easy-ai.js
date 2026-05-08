@@ -157,6 +157,62 @@
     ];
   }
 
+  function settlementCollectionRange(tileType) {
+    if (['homestead', 'outpost', 'manor'].includes(tileType)) return 1;
+    if (['village', 'stronghold', 'estate'].includes(tileType)) return 2;
+    if (['town', 'keep', 'palace'].includes(tileType)) return 3;
+    if (tileType === 'city') return 4;
+    return 0;
+  }
+
+  function buildEconomyPressureContext(state) {
+    const me = state.currentPlayer || 'red';
+    const tiles = state.tiles || [];
+    const units = state.units || [];
+    const tileMap = tileByKey(tiles);
+    const mySettlements = tiles.filter((t) => t.owner === me && settlementCollectionRange(t.type) > 0);
+    const myCells = units.filter((u) => u.player === me).map((u) => keyToCell(u.key));
+    const enemyCells = units.filter((u) => u.player !== me).map((u) => keyToCell(u.key));
+    const prodBy = state.productionByType || {};
+
+    function inMySettlementRange(key) {
+      const cell = keyToCell(key);
+      return mySettlements.some((st) => cubeDistance(cell, keyToCell(st.key)) <= settlementCollectionRange(st.type));
+    }
+
+    function scoreCaptureValue(key, forWorker) {
+      const tile = tileMap.get(key);
+      if (!tile) return -3;
+      let score = 0;
+      const prod = prodBy[tile.type];
+      const isEnemyOrNeutral = tile.owner !== me;
+      if (isEnemyOrNeutral) score += 8;
+      if (prod) score += 12;
+      if (isEnemyOrNeutral && !inMySettlementRange(key)) score -= 10;
+      if (isEnemyOrNeutral && inMySettlementRange(key)) score += 8;
+      if (forWorker && isEnemyOrNeutral && prod && inMySettlementRange(key)) score += 10;
+      if (!forWorker && isEnemyOrNeutral && tile.owner && tile.owner !== me) score += 7;
+      return score;
+    }
+
+    function bestEnemyPressureAt(cell) {
+      if (!enemyCells.length) return 0;
+      return Math.max(...enemyCells.map((ec) => Math.max(0, 7 - cubeDistance(cell, ec))));
+    }
+
+    function nearestEnemyDist(cell) {
+      if (!enemyCells.length) return 8;
+      return Math.min(...enemyCells.map((ec) => cubeDistance(cell, ec)));
+    }
+
+    function nearestFriendlyDist(cell) {
+      if (!myCells.length) return 8;
+      return Math.min(...myCells.map((fc) => cubeDistance(cell, fc)));
+    }
+
+    return { inMySettlementRange, scoreCaptureValue, bestEnemyPressureAt, nearestEnemyDist, nearestFriendlyDist };
+  }
+
   function enemyThreatContext(state) {
     const me = state.currentPlayer || 'red';
     const tiles = state.tiles || [];
@@ -344,7 +400,7 @@
       .sort((a, b) => b.score - a.score);
   }
 
-  function chooseTrainCandidates(state, targetResource, context, threatCtx) {
+  function chooseTrainCandidates(state, targetResource, context, threatCtx, econCtx) {
     const trains = state.legalTrains || [];
     if (!trains.length) return [];
 
@@ -378,12 +434,14 @@
       let score = (rank[t.tileType] || 0) * 8;
       score += (rank[t.tileType] >= 3 ? 8 : 0); // most advanced settlements first
 
-      if (needWorkers) score += isWorker ? 18 : -8;
-      else score += isSoldier ? 10 : -2;
+      if (needWorkers) score += isWorker ? 16 : -8;
+      else score += isSoldier ? 12 : -2;
 
       if (!needWorkers && isSoldier && cls === soldierFocus) score += 10;
       if (isSoldier && (context?.mySoldiers || 0) + 1 < (context?.enemySoldiers || 0)) score += 16;
       if (isSoldier && (context?.ownedCount || 0) >= 18) score += 6;
+      if (isSoldier) score += 7; // baseline pressure: always keep producing threatening units.
+      if (isWorker) score += 6; // never fully neglect economy growth.
 
       // Counter-training pressure (rough RPS): spears/pikes > cavalry, archers/swordsmen > spears/pikes, cavalry > archers.
       const enemyPressure = threatCtx?.targetResourcePressure || {};
@@ -394,6 +452,10 @@
       // Build army if enemy is nearby or if wood is strong enough to support military production.
       if (isSoldier && (context?.frontlineThreat || 0) > 0) score += 10;
       if (isSoldier && (resourceAvail.wood || 0) > (resourceAvail.livestock || 0) + 2) score += 5;
+      // Keep expansion and harassment balanced: military favored when economy footprint is already useful.
+      if (isSoldier && (context?.ownedCount || 0) >= 10) score += 5;
+      if (isWorker && (context?.ownedCount || 0) < 10) score += 7;
+
       if (t.unitType === 'axman') score += axmen < targetAxmen ? 6 : -22;
 
       // if target resource is weak, prefer unit classes that don't lean on weak resources
@@ -406,7 +468,7 @@
     }).sort((a, b) => b.score - a.score);
   }
 
-  function scoreMove(unit, fromKey, toKey, state, targetResource, tileMap, unitMap, balancePlan, progressionGoal, threatCtx) {
+  function scoreMove(unit, fromKey, toKey, state, targetResource, tileMap, unitMap, balancePlan, progressionGoal, threatCtx, econCtx) {
     const toTile = tileMap.get(toKey);
     const fromCell = keyToCell(fromKey);
     const toCell = keyToCell(toKey);
@@ -439,6 +501,7 @@
       if (toTile?.owner === unit.player && prod === targetResource) score += 5;
       if (toTile?.owner === unit.player && !prod) score -= 6;
     }
+    score += econCtx?.scoreCaptureValue?.(toKey, isWorker) || 0;
 
     // stay grouped
     score += friendlyAdj * 2.5;
@@ -469,6 +532,16 @@
       }
       score += bestThreatProximity;
     }
+    if (!isWorker) {
+      const toEnemy = econCtx?.nearestEnemyDist?.(toCell) || 8;
+      const fromEnemy = econCtx?.nearestEnemyDist?.(fromCell) || 8;
+      if (toEnemy < fromEnemy) score += 8; // soldier advance to harass.
+      if (toEnemy <= 2) score += 10;
+      if ((econCtx?.nearestFriendlyDist?.(toCell) || 8) > 4) score -= 6;
+    }
+
+    if (isWorker && !econCtx?.inMySettlementRange?.(toKey) && isCapturing) score -= 12;
+    if (isWorker && econCtx?.inMySettlementRange?.(toKey) && isCapturing) score += 10;
 
     const closed = Boolean(toTile && state.closedTiles?.[toKey]);
     if ((cls === 'cavalry' || isLongWeapon(unit.type)) && closed) score -= 8;
@@ -479,7 +552,7 @@
     return score;
   }
 
-  function chooseMoveCandidates(state, targetResource, balancePlan, progressionGoal, threatCtx) {
+  function chooseMoveCandidates(state, targetResource, balancePlan, progressionGoal, threatCtx, econCtx) {
     const tileMap = tileByKey(state.tiles || []);
     const unitMap = unitByKey(state.units || []);
     const out = [];
@@ -499,7 +572,7 @@
       if (unit.player !== state.currentPlayer) continue;
       const moves = state.legalMovesByUnit?.[unit.key] || [];
       for (const toKey of moves) {
-        const score = scoreMove(unit, unit.key, toKey, state, targetResource, tileMap, unitMap, balancePlan, progressionGoal, threatCtx);
+        const score = scoreMove(unit, unit.key, toKey, state, targetResource, tileMap, unitMap, balancePlan, progressionGoal, threatCtx, econCtx);
         out.push({ type: 'move', from: unit.key, to: toKey, score });
       }
     }
@@ -742,13 +815,14 @@
     const progressionGoal = buildAggressiveProgressionGoal(state);
     const context = strategicContext(state);
     const threatCtx = enemyThreatContext(state);
+    const econCtx = buildEconomyPressureContext(state);
     threatCtx.enemyTactical = null;
     if (threatCtx.targetResourcePressure.wood > 10) progressionGoal.resourceGoals.push('wood');
     if (threatCtx.targetResourcePressure.livestock > 10) progressionGoal.resourceGoals.push('livestock');
     if (threatCtx.targetResourcePressure.crops > 10) progressionGoal.resourceGoals.push('crops');
 
-    let trains = chooseTrainCandidates(state, targetResource, context, threatCtx);
-    let moves = chooseMoveCandidates(state, targetResource, balancePlan, progressionGoal, threatCtx);
+    let trains = chooseTrainCandidates(state, targetResource, context, threatCtx, econCtx);
+    let moves = chooseMoveCandidates(state, targetResource, balancePlan, progressionGoal, threatCtx, econCtx);
     let upgrades = chooseUpgradeCandidates(state, targetResource, balancePlan, context, progressionGoal);
     let shots = chooseShotCandidates(state, threatCtx);
 

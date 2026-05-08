@@ -52,4 +52,4 @@ Then open:
 - Use **Save Game** at the mode menu or in the in-game sidebar to export the current match, and **Load Game** to restore a saved `.txt`/JSON state file.
 
 ## Note
-- Small follow-up documentation touch-up commit to help unblock push/retry workflows.
+- This is a lightweight prototype intended for quick browser playtesting.
